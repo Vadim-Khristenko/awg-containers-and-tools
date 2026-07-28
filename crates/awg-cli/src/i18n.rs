@@ -64,6 +64,10 @@ strings! {
         "Неофициальный проект. Не связан с AmneziaVPN."
     ),
     UsageHeader => ("Usage", "Использование"),
+    CmdBare => (
+        "open the interactive UI (this is what you get with no arguments)",
+        "открыть интерактивный интерфейс (именно он запускается без аргументов)"
+    ),
     CmdGen => ("generate a parameter set", "сгенерировать набор параметров"),
     CmdInstall => ("deploy a server over SSH (interactive)", "развернуть сервер по SSH (интерактивно)"),
     CmdDonate => ("support the project", "поддержать проект"),
@@ -97,10 +101,6 @@ strings! {
     HintRegenerate => ("regenerate", "перегенерировать"),
     HintBack => ("back", "назад"),
     StatusGenerated => ("Fresh parameters generated", "Сгенерирован новый набор параметров"),
-    DeployPlanned => (
-        "Planned: host, port, user, then password / key / key with passphrase / agent.",
-        "В планах: адрес, порт, пользователь, затем пароль / ключ / ключ с пассфразой / агент."
-    ),
     CmdClients => ("supported clients and their limits", "поддерживаемые клиенты и их ограничения"),
     CmdProfiles => ("available mimicry profiles", "доступные профили мимикрии"),
     OptProfile => (
@@ -138,9 +138,185 @@ strings! {
     ErrUnknownClient => ("unknown client", "неизвестный клиент"),
     ErrUnknownBrowser => ("unknown browser profile", "неизвестный профиль браузера"),
     ErrBadMtu => ("MTU out of range", "MTU вне допустимого диапазона"),
-    NotYetImplemented => (
-        "not wired up yet in this build",
-        "в этой сборке ещё не подключено"
+    // ── talking to a server ─────────────────────────────────────────────
+    CmdStatus => (
+        "what is running on a server, and how it is doing",
+        "что запущено на сервере и как оно себя чувствует"
+    ),
+    CmdLogs => (
+        "a node's log, with keys stripped out",
+        "журнал узла, с вырезанными ключами"
+    ),
+    CmdDoctor => (
+        "work out why a node is not carrying traffic",
+        "разобраться, почему узел не везёт трафик"
+    ),
+    CmdUpdate => (
+        "is this tool, or an image on a server, out of date?",
+        "не устарел ли сам инструмент или образ на сервере"
+    ),
+    UsageServerFlags => (
+        "For the commands that talk to a server",
+        "Для команд, которые ходят на сервер"
+    ),
+    OptSshPort => ("SSH port (default 22)", "порт SSH (по умолчанию 22)"),
+    OptProfileFlag => ("a saved connection, by name", "сохранённое подключение по имени"),
+    OptHostFlag => ("connect to this address instead of a saved profile", "подключиться по адресу вместо сохранённого профиля"),
+    OptUserFlag => ("log in as this user (default: root)", "входить этим пользователем (по умолчанию root)"),
+    OptKeyFlag => ("private key file to authenticate with", "файл приватного ключа для входа"),
+    OptSudoFlag => ("docker on that host needs sudo", "docker на том хосте требует sudo"),
+    OptLinesFlag => ("how many log lines to fetch", "сколько строк журнала забрать"),
+    MsgConnecting => ("connecting to", "подключаюсь к"),
+    MsgUnknownHost => (
+        "This is the first time this tool has seen",
+        "Этот инструмент впервые видит"
+    ),
+    MsgVerifyFingerprint => (
+        "Check that against the server's own `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`.",
+        "Сверьте это с выводом `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` на самом сервере."
+    ),
+    AskTrustHost => ("Trust this host?", "Доверять этому хосту?"),
+    MsgNotTrusted => ("not trusted, nothing was sent", "не доверяем, ничего не отправлено"),
+    MsgMismatchAdvice => (
+        "This is not a first connection — the key changed. Either the server was rebuilt, or something is between you and it. Confirm out of band and edit known_hosts by hand.",
+        "Это не первое подключение — ключ сменился. Либо сервер пересобрали, либо между вами кто-то стоит. Проверьте по другому каналу и правьте known_hosts руками."
+    ),
+    MsgSurveying => ("Looking the machine over…", "Осматриваю машину…"),
+    MsgDeploying => ("Setting the server up…", "Поднимаю сервер…"),
+    MsgWillInstall => ("These packages are missing", "Не хватает этих пакетов"),
+    AskRunIt => ("Run that?", "Выполнить?"),
+    MsgAborted => ("nothing was changed", "ничего не изменено"),
+    MsgInstallFailed => ("the install command failed", "команда установки не отработала"),
+    MsgPortBusy => ("something is already listening on", "на этом порту уже кто-то слушает"),
+    MsgPickAnotherPort => (
+        "pass --listen-port with a free one; nothing here will kill another process for you",
+        "укажите свободный через --listen-port; убивать чужой процесс за вас тут никто не станет"
+    ),
+    LblSystem => ("system", "система"),
+    LblDocker => ("docker", "docker"),
+    LblAddress => ("address", "адрес"),
+    LblEndpoint => ("endpoint", "точка входа"),
+    LblContainer => ("container", "контейнер"),
+    OptListenPort => ("UDP port for the tunnel (default 51820)", "UDP-порт туннеля (по умолчанию 51820)"),
+    OptEndpoint => ("address clients should connect to", "адрес, на который будут подключаться клиенты"),
+    OptPull => ("allow pulling the image if it is not on the target", "разрешить скачать образ, если его нет на сервере"),
+    MsgNoContainers => (
+        "No AmneziaWG containers found on that host.",
+        "На этом хосте контейнеров AmneziaWG не найдено."
+    ),
+    MsgNoFaults => ("nothing wrong that I can see", "ничего плохого не вижу"),
+    PromptSecret => ("password or passphrase for", "пароль или пассфраза для"),
+    PromptSudo => ("sudo password for", "пароль sudo для"),
+    LblPeers => ("peers", "пиры"),
+    LblHandshake => ("handshake", "хендшейк"),
+    ValNever => ("never", "никогда"),
+    ErrProfileAndHost => (
+        "--profile and --host are alternatives; pass one or the other",
+        "--profile и --host — это альтернативы, укажите что-то одно"
+    ),
+    ErrNoSuchProfile => ("no saved profile by that name", "сохранённого профиля с таким именем нет"),
+    ErrNoProfiles => (
+        "no saved profiles yet — pass --host, or save one first",
+        "сохранённых профилей пока нет — укажите --host или сначала сохраните профиль"
+    ),
+    ErrPickProfile => (
+        "several profiles are saved; name one with --profile",
+        "сохранено несколько профилей, назовите нужный через --profile"
+    ),
+    ErrNoSuchContainer => ("no such container on that host", "на этом хосте нет такого контейнера"),
+
+    // ── navigation ──────────────────────────────────────────────────────
+    NavHome => ("Home", "Главная"),
+    HintMove => ("move", "перейти"),
+    HintOpen => ("open", "открыть"),
+    HintChange => ("change", "изменить"),
+    HintQuit => ("quit", "выход"),
+    HintScroll => ("scroll", "прокрутка"),
+    HintQuitFromHere => (
+        "This is the top level — press q to quit.",
+        "Это верхний уровень — нажмите q, чтобы выйти."
+    ),
+
+    // ── menu ────────────────────────────────────────────────────────────
+    MenuGenerateSub => (
+        "Parameters for any of the four protocol versions",
+        "Параметры для любой из четырёх версий протокола"
+    ),
+    MenuDeploySub => (
+        "Put a server on a machine you own, over SSH",
+        "Поставить сервер на свою машину по SSH"
+    ),
+    MenuServers => ("Servers", "Серверы"),
+    MenuServersSub => (
+        "What is running out there, and why it is unhappy",
+        "Что там крутится и почему оно недовольно"
+    ),
+    MenuDoctor => ("diagnose", "диагностика"),
+    MenuLogs => ("logs", "журнал"),
+    PanelProfiles => ("Saved connections", "Сохранённые подключения"),
+    PanelNodes => ("Nodes", "Узлы"),
+    PanelDetail => ("Details", "Подробности"),
+    HintSwitchPane => ("switch pane", "сменить панель"),
+    HintConnect => ("connect", "подключиться"),
+    HintRefresh => ("refresh", "обновить"),
+    HintPickProfile => (
+        "Pick a connection and press Enter.",
+        "Выберите подключение и нажмите Enter."
+    ),
+    MsgNoSavedProfiles => (
+        "No saved connections yet. `awg-tool status --host ADDR` can reach a server without one.",
+        "Сохранённых подключений пока нет. До сервера можно достать и без них: `awg-tool status --host АДРЕС`."
+    ),
+    MsgNeedsCli => (
+        "This connection needs a password, which this screen will not ask for. Use",
+        "Этому подключению нужен пароль, а этот экран его не спрашивает. Используйте"
+    ),
+    LblUnreachable => ("no answer", "не отвечает"),
+    MenuAboutSub => ("What this is, and why it exists", "Что это такое и зачем"),
+    MenuDonateSub => (
+        "It is free, and stays free",
+        "Он бесплатный и таким останется"
+    ),
+
+    // ── generate screen ─────────────────────────────────────────────────
+    PanelOptions => ("Options", "Параметры"),
+    PanelClient => ("Client limits", "Ограничения клиента"),
+    PanelWarnings => ("Checks", "Проверки"),
+    LblVersion => ("version", "версия"),
+    LblProfile => ("mimicry", "мимикрия"),
+    LblClient => ("client", "клиент"),
+    ValLow => ("low", "низкая"),
+    ValMedium => ("medium", "средняя"),
+    ValHigh => ("high", "высокая"),
+    ValOn => ("on", "вкл"),
+    ValOff => ("off", "выкл"),
+
+    // ── deploy screen ───────────────────────────────────────────────────
+    DeployHow => (
+        "Run `awg-tool install`. It asks where to go and how to get in, then looks\nthe machine over before it changes anything.",
+        "Запустите `awg-tool install`. Он спросит, куда идти и как войти, а потом\nосмотрит машину, прежде чем что-то менять."
+    ),
+    DeploySteps => (
+        "  1  Address, port, user.\n  \
+           2  Password, key file, key with a passphrase, or your agent.\n  \
+           3  It reads /etc/os-release and checks for docker, iptables, iproute2, curl.\n  \
+           4  Anything missing is shown as the exact command first, and run only then.\n  \
+           5  Parameters are generated for this server alone, and the container starts.\n\n\
+        Connection profiles are remembered, so the second run is one keystroke.\n\
+        A password reaches the disk only if you ask for it.",
+        "  1  Адрес, порт, пользователь.\n  \
+           2  Пароль, файл ключа, ключ с пассфразой или ваш агент.\n  \
+           3  Он читает /etc/os-release и проверяет docker, iptables, iproute2, curl.\n  \
+           4  Чего не хватает — сначала покажет точной командой и только потом выполнит.\n  \
+           5  Параметры генерируются только для этого сервера, контейнер поднимается.\n\n\
+        Профили подключения запоминаются, так что второй запуск — одно нажатие.\n\
+        Пароль попадает на диск, только если вы сами об этом попросите."
+    ),
+
+    // ── about ───────────────────────────────────────────────────────────
+    AboutOrigin => (
+        "This started as a small thing to make installing AmneziaWG less tedious.\nThen it turned out nobody could self-host 3.0 at all — and, well, you only\nlive once. So it grew up into the operator of its own stack.\n\nOfficial self-hosted 3.0 will land upstream sooner or later. When it does,\nuse it. Until then, this works.",
+        "Начиналось всё как утилита, чтобы ставить AmneziaWG было не так муторно.\nПотом выяснилось, что self-hosted 3.0 нет вообще ни у кого — ну а живём\nодин раз. Так оно и выросло в оператора собственного хозяйства.\n\nРано или поздно официальный self-hosted 3.0 появится в апстриме. Появится —\nпользуйтесь им. А пока работает это."
     ),
 }
 

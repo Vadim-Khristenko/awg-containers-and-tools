@@ -7,6 +7,9 @@
 //! parser is honest value rather than stubbornness.
 
 mod i18n;
+mod ops;
+mod remote;
+mod theme;
 mod tui;
 
 use awg_core::awg3::Intensity;
@@ -22,20 +25,81 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let lang = Lang::detect(flag_value(&args, "--lang").as_deref());
 
-    match args.first().map(String::as_str) {
+    match command_of(&args) {
         Some("gen") | Some("generate") => cmd_gen(&args, lang),
         Some("clients") => cmd_clients(lang),
         Some("profiles") => cmd_profiles(lang),
-        Some("install") | Some("tui") | Some("ui") => cmd_install(lang),
+        Some("status") => ops::cmd_status(&args, lang),
+        Some("logs") => ops::cmd_logs(&args, lang),
+        Some("doctor") | Some("diagnose") => ops::cmd_doctor(&args, lang),
+        Some("update") => ops::cmd_update(&args, lang),
+        // `install` does the deploy; the UI is `tui`, or no arguments at all.
+        Some("install") | Some("deploy") => ops::cmd_install(&args, lang),
+        Some("tui") | Some("ui") => cmd_tui(lang),
         Some("donate") | Some("support") => cmd_donate(lang),
         Some("about") => cmd_about(lang),
-        None | Some("help") | Some("-h") | Some("--help") => usage(lang),
+        Some("help") | Some("-h") | Some("--help") => usage(lang),
+        // No arguments opens the UI. Someone who runs a tool with no arguments
+        // is looking for what it does, and a wall of flags is a worse answer
+        // than a screen they can walk through. `--help` still prints the flags,
+        // and a UI is only offered when there is a terminal to draw it on.
+        None => {
+            if is_interactive() {
+                cmd_tui(lang)
+            } else {
+                usage(lang)
+            }
+        }
         Some(other) => {
             eprintln!("{}: {other}", t(lang, K::ErrUnknownCmd));
             usage(lang);
             std::process::exit(2);
         }
     }
+}
+
+/// Every flag that consumes the argument after it. Needed in exactly one place
+/// — working out which word is the command — but wrong here means a flag's
+/// value gets run as a subcommand.
+const VALUE_FLAGS: [&str; 17] = [
+    "--version",
+    "--profile",
+    "--client",
+    "--intensity",
+    "--mtu",
+    "--host",
+    "--browser",
+    "--lang",
+    "--server",
+    "--user",
+    "--port",
+    "--key",
+    "--lines",
+    "--listen-port",
+    "--endpoint",
+    "--name",
+    "--image",
+];
+
+/// The first word that is neither a flag nor a flag's value.
+///
+/// `awg-tool --host 10.0.0.5 status` is a natural thing to type, and reading
+/// only `args[0]` answered it with "unknown command: --host". Both orderings
+/// now work, and the flag's *value* is never mistaken for the command.
+fn command_of(args: &[String]) -> Option<&str> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if VALUE_FLAGS.contains(&a.as_str()) {
+            it.next();
+        } else if !a.starts_with('-') {
+            return Some(a.as_str());
+        }
+    }
+    // Nothing but flags: `--help` is still a request for help, and a bare
+    // invocation is still a request for the UI.
+    args.iter()
+        .find(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
+        .map(String::as_str)
 }
 
 fn flag_value(args: &[String], name: &str) -> Option<String> {
@@ -48,6 +112,17 @@ fn has_flag(args: &[String], name: &str) -> bool {
     args.iter().any(|a| a == name)
 }
 
+/// Is there a real terminal on both ends?
+///
+/// The UI switches to the alternate screen and reads keys, so it needs a tty
+/// for input as well as output. Piped into something — `awg-tool | tee`, a CI
+/// step, a `command -v` probe — it must print instead of trying to draw, or it
+/// fails with a bare "No such device or address" that explains nothing.
+fn is_interactive() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
 fn banner(lang: Lang) {
     println!("awg-tool {}", env!("CARGO_PKG_VERSION"));
     println!("{}", t(lang, K::Tagline));
@@ -58,12 +133,22 @@ fn usage(lang: Lang) {
     banner(lang);
     println!();
     println!("{}:", t(lang, K::UsageHeader));
+    println!("  awg-tool");
+    println!("      {}", t(lang, K::CmdBare));
     println!("  awg-tool gen [--version 3.0] [--profile quic] [--client amneziavpn] [--uapi]");
     println!("      {}", t(lang, K::CmdGen));
     println!("  awg-tool clients");
     println!("      {}", t(lang, K::CmdClients));
     println!("  awg-tool profiles");
     println!("      {}", t(lang, K::CmdProfiles));
+    println!("  awg-tool status [--server NAME | --host ADDR]");
+    println!("      {}", t(lang, K::CmdStatus));
+    println!("  awg-tool doctor [CONTAINER]");
+    println!("      {}", t(lang, K::CmdDoctor));
+    println!("  awg-tool logs [CONTAINER] [--lines 200]");
+    println!("      {}", t(lang, K::CmdLogs));
+    println!("  awg-tool update");
+    println!("      {}", t(lang, K::CmdUpdate));
     println!("  awg-tool install");
     println!("      {}", t(lang, K::CmdInstall));
     println!("  awg-tool donate");
@@ -83,6 +168,18 @@ fn usage(lang: Lang) {
     println!("  --mimic-all          {}", t(lang, K::OptMimicAll));
     println!("  --tag-c              {}", t(lang, K::OptTagC));
     println!("  --lang en|ru         {}", t(lang, K::OptLang));
+    println!();
+    println!("{}:", t(lang, K::UsageServerFlags));
+    println!("  --server home        {}", t(lang, K::OptProfileFlag));
+    println!("  --host 10.0.0.5      {}", t(lang, K::OptHostFlag));
+    println!("  --user root          {}", t(lang, K::OptUserFlag));
+    println!("  --port 22            {}", t(lang, K::OptSshPort));
+    println!("  --key ~/.ssh/id_ed25519  {}", t(lang, K::OptKeyFlag));
+    println!("  --sudo               {}", t(lang, K::OptSudoFlag));
+    println!("  --lines 200          {}", t(lang, K::OptLinesFlag));
+    println!("  --listen-port 51820  {}", t(lang, K::OptListenPort));
+    println!("  --endpoint 1.2.3.4   {}", t(lang, K::OptEndpoint));
+    println!("  --pull               {}", t(lang, K::OptPull));
     println!();
     println!("{}", t(lang, K::Unofficial));
 }
@@ -237,7 +334,7 @@ fn cmd_profiles(lang: Lang) {
     }
 }
 
-fn cmd_install(lang: Lang) {
+fn cmd_tui(lang: Lang) {
     if let Err(e) = tui::run(lang) {
         eprintln!("awg-tool: {e}");
         std::process::exit(1);
@@ -262,4 +359,44 @@ fn cmd_about(lang: Lang) {
     println!("{}", t(lang, K::WhyUnique));
     println!();
     println!("{}", t(lang, K::Unofficial));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn a(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_command_is_found_whichever_side_of_the_flags_it_is_on() {
+        assert_eq!(command_of(&a(&["status", "--host", "h"])), Some("status"));
+        assert_eq!(command_of(&a(&["--host", "h", "status"])), Some("status"));
+        assert_eq!(
+            command_of(&a(&["--server", "home", "--lines", "50", "logs"])),
+            Some("logs")
+        );
+    }
+
+    #[test]
+    fn a_flags_value_is_never_run_as_a_command() {
+        // `--host status` would otherwise dispatch to the status command
+        // against a server literally named "status".
+        assert_eq!(command_of(&a(&["--host", "status"])), None);
+        assert_eq!(command_of(&a(&["--client", "gen"])), None);
+    }
+
+    #[test]
+    fn a_positional_after_the_command_is_not_the_command() {
+        assert_eq!(command_of(&a(&["logs", "awg-server"])), Some("logs"));
+        assert_eq!(command_of(&a(&["doctor", "vpn"])), Some("doctor"));
+    }
+
+    #[test]
+    fn nothing_but_flags_still_finds_help_and_otherwise_asks_for_the_ui() {
+        assert_eq!(command_of(&a(&["--help"])), Some("--help"));
+        assert_eq!(command_of(&a(&["--lang", "ru"])), None);
+        assert_eq!(command_of(&[]), None);
+    }
 }
