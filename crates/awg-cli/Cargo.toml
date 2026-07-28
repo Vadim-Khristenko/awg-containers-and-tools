@@ -1,0 +1,17 @@
+[package]
+name = "awg-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for generating and validating AmneziaWG configurations"
+
+[[bin]]
+name = "awg-tool"
+path = "src/main.rs"
+
+[dependencies]
+awg-core = { workspace = true }
+ratatui = "0.30"
+crossterm = "0.29"

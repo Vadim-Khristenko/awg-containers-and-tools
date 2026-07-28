@@ -1,0 +1,21 @@
+[package]
+name = "awg-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Protocol rules for AmneziaWG 1.0 / 1.5 / 2.0 / 3.0 - parameter generation, invariants and rendering"
+
+[dependencies]
+rand = { workspace = true }
+base64 = { workspace = true }
+thiserror = { workspace = true }
+flate2 = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+
+# The transport needs sockets and a TLS stack, neither of which the WASM build of
+# this crate has; there it simply has no `ssh` module rather than a stubbed one.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ssh2 = { workspace = true }

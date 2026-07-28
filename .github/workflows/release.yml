@@ -1,0 +1,209 @@
+name: Release
+
+# Tag a commit to release it:
+#
+#     git tag -s v0.1.0 -m "v0.1.0"
+#     git push origin v0.1.0
+#
+# Images are pushed to Docker Hub only if both of these are configured:
+#   vars.DOCKERHUB_USERNAME     repository variable — the account (vaiprog)
+#   secrets.DOCKERHUB_TOKEN     repository secret   — token with Read/Write
+# The username is a variable rather than a secret deliberately: it is not one,
+# and keeping it visible means the logs show which account was pushed to.
+# Without them the release still happens, with binaries but no images, and the
+# notes say so rather than pointing at tags that were never pushed.
+#
+# The live tunnel tests are deliberately not part of this pipeline; they need
+# /dev/net/tun and privileged containers. Run `Live tunnel tests` by hand
+# before tagging.
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Taken from the same variable the login uses, so the account we authenticate
+  # as and the account in the tag can never drift apart.
+  REGISTRY_USER: ${{ vars.DOCKERHUB_USERNAME }}
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.creds.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal --component clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+      # The `secrets` context is not available in a job-level `if`, so the
+      # answer has to be computed in a step and passed along as an output.
+      - id: creds
+        name: Are Docker Hub credentials configured?
+        env:
+          USER_SET: ${{ vars.DOCKERHUB_USERNAME }}
+          TOKEN_SET: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$USER_SET" ] && [ -n "$TOKEN_SET" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are not set — images will not be published."
+          fi
+
+  binaries:
+    name: Binary (${{ matrix.target }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    target: x86_64-unknown-linux-gnu,  ext: "" }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, ext: "" }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,   ext: ".exe" }
+          - { os: macos-latest,   target: aarch64-apple-darwin,     ext: "" }
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --bin awg-tool
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/awg-tool${{ matrix.ext }}" \
+             "dist/awg-tool-${{ matrix.target }}${{ matrix.ext }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: awg-tool-${{ matrix.target }}
+          path: dist/*
+
+  publish-images:
+    name: Push ${{ matrix.image }}
+    needs: verify
+    if: needs.verify.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: amnezia-wg-1,  awg: "1.0", go: v0.2.12 }
+          - { image: amnezia-wg-15, awg: "1.5", go: v0.2.14-beta-awg-1.5-1 }
+          - { image: amnezia-wg-2,  awg: "2.0", go: v0.2.19 }
+          - { image: amnezia-wg-3,  awg: "3.0", go: v3.0.2 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: containers
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            AWG_VERSION=${{ matrix.awg }}
+            AWG_GO_VERSION=${{ matrix.go }}
+          tags: |
+            ${{ env.REGISTRY_USER }}/${{ matrix.image }}:${{ github.ref_name }}
+            ${{ env.REGISTRY_USER }}/${{ matrix.image }}:latest
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  publish-dns-image:
+    name: Push amnezia-wg-dns
+    needs: verify
+    if: needs.verify.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: containers
+          file: containers/Dockerfile.dns
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ env.REGISTRY_USER }}/amnezia-wg-dns:${{ github.ref_name }}
+            ${{ env.REGISTRY_USER }}/amnezia-wg-dns:latest
+          cache-from: type=gha,scope=dns
+          cache-to: type=gha,mode=max,scope=dns
+
+  release:
+    name: GitHub release
+    needs: [binaries, publish-images, publish-dns-image]
+    # The publish jobs are skipped when there are no credentials, and a skipped
+    # dependency would skip this job too — so the condition is decided here.
+    if: always() && needs.binaries.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Compose the notes
+        env:
+          TAG: ${{ github.ref_name }}
+          PUBLISHED: ${{ needs.publish-images.result }}
+        run: |
+          if [ "$PUBLISHED" = "success" ]; then
+            cat > notes.md <<EOF
+          Images for this release are on Docker Hub:
+
+          | Image | Protocol |
+          |---|---|
+          | \`vaiprog/amnezia-wg-1:$TAG\` | AWG 1.0 |
+          | \`vaiprog/amnezia-wg-15:$TAG\` | AWG 1.5 |
+          | \`vaiprog/amnezia-wg-2:$TAG\` | AWG 2.0 |
+          | \`vaiprog/amnezia-wg-3:$TAG\` | AWG 3.0 |
+          | \`vaiprog/amnezia-wg-dns:$TAG\` | resolver |
+          EOF
+          else
+            cat > notes.md <<'EOF'
+          Container images were **not** published for this tag: Docker Hub
+          credentials are not configured on this repository. Build them from
+          source with `containers/build.sh`.
+          EOF
+          fi
+          cat >> notes.md <<'EOF'
+
+          Binaries below are unsigned; verify them against `SHA256SUMS`.
+
+          Unofficial community build — not affiliated with AmneziaVPN.
+          EOF
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          body_path: notes.md

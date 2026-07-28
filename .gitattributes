@@ -1,0 +1,13 @@
+# Everything text in this repository is LF, checked out LF on every platform.
+#
+# This is not a style preference: containers/*.sh and containers/awg-* are
+# copied into an Alpine image and executed there. A CRLF line ending on the
+# shebang makes the kernel look for an interpreter named "/bin/sh\r", and the
+# container dies with a "no such file or directory" that names a file which
+# plainly exists. Editing one of these on Windows without this file is enough
+# to cause it.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gz  binary

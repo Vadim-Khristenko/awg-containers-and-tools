@@ -1,0 +1,37 @@
+name: Live tunnel tests
+
+# These bring up real tunnels: they need /dev/net/tun, privileged containers
+# and several minutes, so they do not run on every push. Trigger them by hand
+# before a release, and weekly so that upstream changes to the base images do
+# not rot unnoticed.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1"
+
+jobs:
+  tunnels:
+    name: All four generations
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Make sure the tun device exists
+        run: |
+          sudo modprobe tun || true
+          test -c /dev/net/tun
+
+      - name: Build images
+        run: cd containers && ./build.sh
+
+      # A handshake, ICMP both ways and a 4 MiB transfer with matching
+      # checksums, per generation. "It started" is not the same as "it works".
+      - name: Self test
+        run: cd containers && sudo ./selftest.sh
+
+      - name: All four at once
+        run: cd containers && sudo ./paralleltest.sh
+
+      - name: DNS leak protection
+        run: cd containers && sudo ./dnstest.sh

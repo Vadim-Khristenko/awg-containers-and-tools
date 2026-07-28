@@ -1,0 +1,117 @@
+# A working AmneziaWG 3.0 pair plus the tunnel-only resolver, on isolated
+# networks — the same shape as the selftest, ready to copy for a real
+# deployment.
+#
+#   awg-tool gen --version 3.0 > params.conf   # SAME block in both configs
+#   # paste it into server.conf and client.conf, add keys/addresses, then:
+#   docker compose up -d
+#   docker compose exec server awg-uapi get
+#   docker compose exec server awg-peer add laptop     # prints a client config
+#
+# For a real server, drop the `client` service, replace the server's `awg`
+# network with `network_mode: host` (or keep the published port), and point the
+# client's Endpoint at the public address. Keep the `dns` network as it is.
+
+services:
+  # Resolver on a dedicated bridge at a fixed address, which is what upstream
+  # AmneziaVPN does. Nothing publishes this port and no other network reaches
+  # this bridge, so `DNS = 172.29.172.254` in a client config can only be
+  # answered through the tunnel — a query that escapes the tunnel gets no
+  # answer at all rather than quietly going to the café's resolver.
+  dns:
+    image: vaiprog/amnezia-wg-dns:latest
+    container_name: awg-dns
+    restart: unless-stopped
+    # It answers UDP/53 and needs no privileges to do it.
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: ["/var/log/unbound"]
+    networks:
+      dns:
+        ipv4_address: 172.29.172.254
+
+  server:
+    image: vaiprog/amnezia-wg-3:latest
+    container_name: awg-server
+    restart: unless-stopped
+    depends_on: [dns]
+    # NET_ADMIN for the tun device and the routing/NAT rules; /dev/net/tun
+    # because amneziawg-go is a userspace implementation.
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    # Read-only in an unprivileged container, so it has to be handed in here.
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    ports:
+      - "51820:51820/udp"
+    volumes:
+      - ./server.conf:/etc/amnezia/awg/awg0.conf:ro
+      # Peer records, the boot counter and the event log. Without these volumes
+      # a restart looks like a first start, and peers added with `awg-peer`
+      # vanish with the container that knew about them.
+      - awg-state:/var/lib/awg
+      - awg-log:/var/log/awg
+    networks:
+      awg:
+        ipv4_address: 172.31.99.10
+      # Joining both networks is the whole mechanism: the server is the only
+      # thing on the DNS bridge besides the resolver.
+      dns:
+
+  client:
+    image: vaiprog/amnezia-wg-3:latest
+    container_name: awg-client
+    restart: unless-stopped
+    depends_on: [server]
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    volumes:
+      - ./client.conf:/etc/amnezia/awg/awg0.conf:ro
+    networks:
+      awg:
+        ipv4_address: 172.31.99.11
+
+networks:
+  awg:
+    ipam:
+      config:
+        - subnet: 172.31.99.0/24
+  # Fixed subnet on purpose: the resolver's address is written into every client
+  # config ever issued, so it is not allowed to move.
+  dns:
+    ipam:
+      config:
+        - subnet: 172.29.172.0/24
+
+volumes:
+  awg-state:
+  awg-log:
+
+# The client side of the DNS arrangement, for the config this pair uses:
+#
+#   [Interface]
+#   DNS = 172.29.172.254
+#   [Peer]
+#   AllowedIPs = 10.99.0.0/24, 172.29.172.254/32
+#
+# The /32 is what routes the query into the tunnel. Leave it out and the client
+# sends DNS to an address its own network cannot reach: it fails safe, but it
+# fails.
+#
+# Environment knobs understood by the entrypoint:
+#   AWG_IFACE=awg0                          interface name
+#   AWG_CONF=/etc/amnezia/awg/awg0.conf     config path (derived from AWG_IFACE)
+#   AWG_NAT=auto|on|off                     auto = NAT when the config has a ListenPort
+#   AWG_FWMARK / AWG_TABLE                  default to ListenPort; used only for a
+#                                           0.0.0.0/0 AllowedIPs client
+#   AWG_STATE_DIR=/var/lib/awg              boot counter and peer records
+#   AWG_EVENT_LOG=/var/log/awg/events.log   operational log — see README
+#   AWG_EVENT_LOG_MAX_BYTES=262144          rotation threshold, one old file kept
+#   AWG_DUMP_REQUEST=1                      write the UAPI request to /tmp/uapi-set.req
+#                                           (contains the private key — debugging only)
+#   LOG_LEVEL=verbose                       amneziawg-go's own logging
+#
+# ...and by awg-peer:
+#   AWG_ENDPOINT=vpn.example.com:51820      what to write into issued configs
+#   AWG_CLIENT_DNS=172.29.172.254           resolver for issued configs
+#   AWG_CLIENT_ALLOWED="0.0.0.0/0"          AllowedIPs for issued configs

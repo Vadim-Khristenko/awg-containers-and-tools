@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # Warnings are errors here on purpose: more than one bug in this project
+      # started life as a clippy warning nobody acted on.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+  images:
+    name: Build ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: amnezia-wg-1,  awg: "1.0", go: v0.2.12 }
+          - { image: amnezia-wg-15, awg: "1.5", go: v0.2.14-beta-awg-1.5-1 }
+          - { image: amnezia-wg-2,  awg: "2.0", go: v0.2.19 }
+          - { image: amnezia-wg-3,  awg: "3.0", go: v3.0.2 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+
+      # Build only. Publishing happens on a tag, in release.yml.
+      - uses: docker/build-push-action@v7
+        with:
+          context: containers
+          push: false
+          build-args: |
+            AWG_VERSION=${{ matrix.awg }}
+            AWG_GO_VERSION=${{ matrix.go }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  dns-image:
+    name: Build amnezia-wg-dns
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: containers
+          file: containers/Dockerfile.dns
+          push: false
+          cache-from: type=gha,scope=dns
+          cache-to: type=gha,mode=max,scope=dns

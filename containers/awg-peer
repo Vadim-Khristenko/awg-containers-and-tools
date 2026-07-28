@@ -1,0 +1,191 @@
+#!/bin/bash
+# Add, list and remove peers on a running node, and issue the client config that
+# goes with a new one.
+#
+#   awg-peer add <label> [ip]     new peer, prints the client config on stdout
+#   awg-peer list                 label, public key, allowed IP, last handshake
+#   awg-peer rm  <label|pubkey>   revoke
+#
+# Everything goes through the UAPI socket, for the same reason the entrypoint
+# does: `awg set` comes from amneziawg-tools, which cannot read the 3.0 keys and
+# would rewrite the device without them.
+#
+# The client's private key is generated here, printed once and never written to
+# disk. What is kept in $AWG_PEERS_DIR is the label, the public key, the address
+# and the preshared key — the last one because the server needs it again on
+# every restart. That file is 0600 and its contents never reach the event log.
+set -euo pipefail
+
+IFACE="${AWG_IFACE:-awg0}"
+export AWG_IFACE="$IFACE"
+CONF="${AWG_CONF:-/etc/amnezia/awg/${IFACE}.conf}"
+SOCK="${AWG_SOCK_DIR:-/var/run/amneziawg}/${IFACE}.sock"
+PEERS_DIR="${AWG_PEERS_DIR:-/var/lib/awg/peers.d}"
+# The resolver from docker-compose.yml. A client config that points anywhere
+# else is a client whose DNS queries leave the tunnel.
+CLIENT_DNS="${AWG_CLIENT_DNS:-172.29.172.254}"
+
+# shellcheck source=awg-log.sh
+. /usr/lib/awg/log.sh
+
+die() { printf '!! %s\n' "$*" >&2; exit 1; }
+[ -S "$SOCK" ] || die "no UAPI socket at $SOCK — is the interface up?"
+
+uapi() { socat -t 15 - "UNIX-CONNECT:$SOCK"; }
+
+# UAPI speaks hex, .conf files speak base64. `-v` on od is not optional: without
+# it a repeated 16-byte run collapses to "*" and the key silently truncates.
+b64hex() { printf '%s' "$1" | base64 -d | od -An -v -tx1 | tr -d ' \n'; }
+# bash's printf understands \xNN; busybox base64 has no line-wrap flag, hence tr.
+hexb64() { printf "$(printf '%s' "$1" | sed 's/../\\x&/g')" | base64 | tr -d '\n'; }
+
+# One [Interface] value out of the server config.
+conf_get() {
+    awk -v want="$1" '
+        /^[[:space:]]*\[/ { inif = ($0 ~ /^[[:space:]]*\[[Ii]nterface\]/); next }
+        !inif { next }
+        { sub(/#.*/, ""); n = index($0, "="); if (n == 0) next
+          k = substr($0, 1, n-1); v = substr($0, n+1)
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", k); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+          if (k == want) { print v; exit } }
+    ' "$CONF"
+}
+
+# The obfuscation block, copied verbatim: both ends must carry identical
+# parameters, and values that differ are a handshake that never completes and
+# never says why.
+conf_obfuscation() {
+    grep -E '^[[:space:]]*(H[1-4]|S[1-4]|Jc|Jmin|Jmax|I[1-5]|Itime|HeaderProtectionKey|ContentPaddingAddition|RekeyAfterTime|RekeyTimeout|RejectAfterTime|KeepaliveTimeout|MaxHandshakeAttempts)[[:space:]]*=' "$CONF" || true
+}
+
+peer_file() { printf '%s/%s.peer' "$PEERS_DIR" "$1"; }
+
+label_of() {
+    local pub=$1 f
+    for f in "$PEERS_DIR"/*.peer; do
+        [ -e "$f" ] || continue
+        if grep -qxF "PublicKey=$pub" "$f"; then basename "$f" .peer; return 0; fi
+    done
+    printf '(unlabelled)'
+}
+
+# --- add ---------------------------------------------------------------------
+cmd_add() {
+    local label=${1:-} ip=${2:-}
+    [ -n "$label" ] || die "usage: awg-peer add <label> [ip]"
+    case "$label" in *[!A-Za-z0-9._-]*) die "label may only contain A-Z a-z 0-9 . _ -" ;; esac
+    mkdir -p "$PEERS_DIR" && chmod 700 "$PEERS_DIR"
+    if [ -e "$(peer_file "$label")" ]; then die "peer '$label' already exists"; fi
+
+    local addr net n
+    addr=$(conf_get Address)
+    [ -n "$addr" ] || die "no [Interface] Address in $CONF"
+    addr=${addr%%,*}; addr=${addr%%/*}
+    net=${addr%.*}
+
+    if [ -z "$ip" ]; then
+        # Lowest free host in the tunnel /24; .1 is the server itself. The live
+        # device is the authority, not $PEERS_DIR — peers written into the
+        # mounted .conf by hand are not in $PEERS_DIR but are very much on the
+        # interface, and handing out one of their addresses would black-hole
+        # both of them.
+        local used
+        used=$(printf 'get=1\n\n' | uapi | sed -n 's/^allowed_ip=//p')
+        for n in $(seq 2 254); do
+            if ! grep -qxF "${net}.${n}/32" <<< "$used"; then ip="${net}.${n}/32"; break; fi
+        done
+        [ -n "$ip" ] || die "no free address left in ${net}.0/24"
+    fi
+    case "$ip" in */*) : ;; *) ip="$ip/32" ;; esac
+
+    local priv pub psk srv_pub
+    priv=$(awg genkey)
+    pub=$(printf '%s' "$priv" | awg pubkey)
+    psk=$(awg genpsk)
+    # Read out of the config rather than off the device: the daemon does not
+    # hand back a public key for the interface, only the private one.
+    srv_pub=$(conf_get PrivateKey | awg pubkey)
+
+    if ! printf 'set=1\npublic_key=%s\npreshared_key=%s\nreplace_allowed_ips=true\nallowed_ip=%s\n\n' \
+        "$(b64hex "$pub")" "$(b64hex "$psk")" "$ip" | uapi | grep -q '^errno=0'; then
+        die "the daemon refused the new peer"
+    fi
+
+    ( umask 077
+      printf 'Label=%s\nPublicKey=%s\nAddress=%s\nPresharedKey=%s\nCreated=%s\n' \
+          "$label" "$pub" "$ip" "$psk" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$(peer_file "$label")" )
+
+    awg_event peer-add "peer=$pub" "label=$label" "address=$ip"
+
+    local port endpoint mtu
+    port=$(conf_get ListenPort)
+    endpoint="${AWG_ENDPOINT:-${AWG_PUBLIC_HOST:-SERVER_PUBLIC_IP}:${port:-51820}}"
+    mtu=$(conf_get MTU)
+
+    cat <<EOF
+[Interface]
+PrivateKey = $priv
+Address = $ip
+DNS = $CLIENT_DNS
+MTU = ${mtu:-1280}
+$(conf_obfuscation)
+
+[Peer]
+PublicKey = $srv_pub
+PresharedKey = $psk
+AllowedIPs = ${AWG_CLIENT_ALLOWED:-${net}.0/24, ${CLIENT_DNS}/32}
+Endpoint = $endpoint
+PersistentKeepalive = 25
+EOF
+    # Recorded after the config has been printed, so the log cannot claim an
+    # issue that never reached the operator.
+    awg_event client-config-issued "peer=$pub" "label=$label" "endpoint=$endpoint" "dns=$CLIENT_DNS"
+}
+
+# --- list --------------------------------------------------------------------
+cmd_list() {
+    local line pub="" ips="" hs=""
+    row() { if [ -n "$pub" ]; then printf '%-16s %-44s %-22s %s\n' "$(label_of "$pub")" "$pub" "$ips" "${hs:-never}"; fi; }
+    printf '%-16s %-44s %-22s %s\n' LABEL PUBLIC_KEY ALLOWED_IPS LAST_HANDSHAKE
+    while IFS= read -r line; do
+        case "$line" in
+            public_key=*) row; pub=$(hexb64 "${line#public_key=}"); ips=""; hs="" ;;
+            allowed_ip=*) ips="${ips:+$ips,}${line#allowed_ip=}" ;;
+            last_handshake_time_sec=*)
+                if [ "${line#*=}" = 0 ]; then
+                    hs=never
+                else
+                    hs=$(date -u -d "@${line#*=}" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf 'epoch:%s' "${line#*=}")
+                fi ;;
+        esac
+    done < <(printf 'get=1\n\n' | uapi)
+    row
+}
+
+# --- rm ----------------------------------------------------------------------
+cmd_rm() {
+    local who=${1:-} pub="" label=""
+    [ -n "$who" ] || die "usage: awg-peer rm <label|pubkey>"
+    if [ -e "$(peer_file "$who")" ]; then
+        label=$who
+        pub=$(sed -n 's/^PublicKey=//p' "$(peer_file "$who")")
+    else
+        pub=$who
+        label=$(label_of "$pub")
+    fi
+    [ -n "$pub" ] || die "no peer '$who'"
+
+    if ! printf 'set=1\npublic_key=%s\nremove=true\n\n' "$(b64hex "$pub")" | uapi | grep -q '^errno=0'; then
+        die "the daemon refused to remove $pub"
+    fi
+    rm -f "$(peer_file "$label")"
+    awg_event peer-remove "peer=$pub" "label=$label"
+    printf 'removed %s (%s)\n' "$label" "$pub"
+}
+
+case "${1:-}" in
+    add)  shift; cmd_add "$@" ;;
+    list) cmd_list ;;
+    rm)   shift; cmd_rm "$@" ;;
+    *)    printf 'usage: awg-peer {add <label> [ip] | list | rm <label|pubkey>}\n' >&2; exit 2 ;;
+esac

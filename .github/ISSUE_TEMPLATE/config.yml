@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Problems with AmneziaVPN itself
+    url: https://github.com/amnezia-vpn/amnezia-client/issues
+    about: >
+      This project is unofficial and unaffiliated. If the bug is in the Amnezia
+      client or in amneziawg-go rather than in these images or in awg-tool,
+      report it upstream instead.

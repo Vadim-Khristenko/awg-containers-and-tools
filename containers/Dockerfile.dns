@@ -1,0 +1,45 @@
+# The tunnel's resolver — unbound on a dedicated docker network at a fixed
+# address, which is the shape upstream AmneziaVPN uses.
+#
+# The anti-leak property is not cryptographic. 172.29.172.254 is an RFC1918
+# address on a bridge that only the AWG container joins, it is never published
+# to the host, and docker's own DOCKER-ISOLATION rules drop forwarding between
+# bridges. So a client whose `DNS = 172.29.172.254` can only reach it through
+# the tunnel: if the tunnel is down or the query escapes it, the query does not
+# fall back to the local network's resolver, it simply gets no answer. A leak
+# announces itself instead of hiding. See containers/dnstest.sh for the proof
+# in both directions.
+#
+# unbound resolves from the root zone itself rather than forwarding to a public
+# resolver: forwarding would move the leak rather than close it — the whole
+# query stream would just be legible to whoever runs 1.1.1.1 instead.
+FROM alpine:3.24
+ARG BUILD_DATE=1970-01-01T00:00:00Z
+ARG AWG_DNS_ADDRESS=172.29.172.254
+LABEL org.opencontainers.image.title="amnezia-wg-dns — tunnel-only resolver (unofficial)" \
+      org.opencontainers.image.description="unbound recursive resolver for the AmneziaWG containers, reachable only from inside the tunnel. UNOFFICIAL community build — not affiliated with, endorsed by or supported by AmneziaVPN." \
+      org.opencontainers.image.authors="Vadim Khristenko (VAI_PROG)" \
+      org.opencontainers.image.vendor="Vadim Khristenko (VAI_PROG)" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/Vadim-Khristenko/awg-containers-and-tools" \
+      org.opencontainers.image.url="https://github.com/Vadim-Khristenko/awg-containers-and-tools" \
+      org.opencontainers.image.documentation="https://architect.vai-rice.space" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.base.name="docker.io/library/alpine:3.24" \
+      space.vai-rice.awg.dns-address="${AWG_DNS_ADDRESS}"
+
+# unbound only. No dig, no bind-tools, no shell utilities beyond busybox: this
+# image exists to answer port 53 and nothing else, and every extra package is
+# another thing to patch on a host that is meant to be forgettable.
+RUN apk add --no-cache unbound \
+ && rm -rf /var/cache/apk/* /usr/share/man \
+ && mkdir -p /var/log/unbound \
+ && chown unbound:unbound /var/log/unbound
+
+COPY unbound.conf /etc/unbound/unbound.conf
+
+EXPOSE 53/udp 53/tcp
+# -d keeps it in the foreground so docker sees the real process; -p means "do
+# not fork a pidfile writer", which an unprivileged read-only container cannot
+# write anyway.
+ENTRYPOINT ["/usr/sbin/unbound", "-d", "-p", "-c", "/etc/unbound/unbound.conf"]

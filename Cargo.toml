@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = ["crates/awg-core", "crates/awg-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"   # edition 2024 needs 1.85; 1.90 is the floor we actually test against
+license = "MIT"
+repository = "https://github.com/Vadim-Khristenko/awg-containers-and-tools"
+
+[workspace.dependencies]
+awg-core = { path = "crates/awg-core" }
+rand = "0.10"
+base64 = "0.23"
+thiserror = "2"
+flate2 = "1.1"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+# vendored-openssl builds OpenSSL from source: the containers this ships in have
+# no libssh2 and no system OpenSSL headers to link against.
+ssh2 = { version = "0.9.6", features = ["vendored-openssl"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

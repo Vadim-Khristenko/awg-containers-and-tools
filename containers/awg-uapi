@@ -1,0 +1,21 @@
+#!/bin/sh
+# Raw access to the amneziawg-go UAPI socket.
+#
+#   awg-uapi get  [iface]        dump the device (get=1)
+#   awg-uapi raw  [iface]        send an arbitrary request read from stdin
+#
+# `awg show` cannot be used for the 3.0 keys: amneziawg-tools does not know
+# them and drops them from its output.
+set -eu
+
+cmd=${1:-get}
+iface=${2:-${AWG_IFACE:-awg0}}
+sock="${AWG_SOCK_DIR:-/var/run/amneziawg}/${iface}.sock"
+
+[ -S "$sock" ] || { echo "no UAPI socket at $sock" >&2; exit 1; }
+
+case "$cmd" in
+    get) printf 'get=1\n\n' | socat -t 15 - "UNIX-CONNECT:$sock" ;;
+    raw) { cat; printf '\n'; } | socat -t 15 - "UNIX-CONNECT:$sock" ;;
+    *)   echo "usage: awg-uapi [get|raw] [iface]" >&2; exit 2 ;;
+esac
