@@ -49,6 +49,13 @@ ARG AWG_VERSION=3.0
 # Dockerfile that reads the clock is a Dockerfile whose output can never be
 # reproduced — an honest zero is better than a plausible lie.
 ARG BUILD_DATE=1970-01-01T00:00:00Z
+# A hash of everything that decides what ends up in this image — the Dockerfile,
+# the scripts it copies, and the upstream tags it builds from. The release
+# pipeline compares it against the published image and skips the rebuild when
+# they match, so a release that only touched the Rust side does not hand users
+# five new digests containing nothing new. Empty on a local build; that just
+# means the next pipeline run cannot prove the image is unchanged and rebuilds.
+ARG INPUTS_DIGEST=
 # image.version is the amneziawg-go tag, not the protocol generation: it is the
 # only thing that actually differs between these four images, and it is what
 # someone comparing a running container against a CVE needs to see.
@@ -65,7 +72,8 @@ LABEL org.opencontainers.image.title="AmneziaWG ${AWG_VERSION} node (unofficial)
       org.opencontainers.image.base.name="docker.io/library/alpine:3.24" \
       space.vai-rice.awg.protocol="${AWG_VERSION}" \
       space.vai-rice.awg.go-version="${AWG_GO_VERSION}" \
-      space.vai-rice.awg.tools-version="${AWG_TOOLS_VERSION}"
+      space.vai-rice.awg.tools-version="${AWG_TOOLS_VERSION}" \
+      space.vai-rice.awg.inputs="${INPUTS_DIGEST}"
 RUN apk add --no-cache bash iptables ip6tables iproute2 conntrack-tools socat dumb-init
 COPY --from=build /out-awg-go /usr/bin/amneziawg-go
 COPY --from=tools /out-awg    /usr/bin/awg

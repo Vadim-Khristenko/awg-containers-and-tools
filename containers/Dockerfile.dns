@@ -16,6 +16,9 @@
 FROM alpine:3.24
 ARG BUILD_DATE=1970-01-01T00:00:00Z
 ARG AWG_DNS_ADDRESS=172.29.172.254
+# See the same argument in containers/Dockerfile: it lets the release pipeline
+# tell "identical image, new tag" from "actually rebuilt".
+ARG INPUTS_DIGEST=
 LABEL org.opencontainers.image.title="amnezia-wg-dns — tunnel-only resolver (unofficial)" \
       org.opencontainers.image.description="unbound recursive resolver for the AmneziaWG containers, reachable only from inside the tunnel. UNOFFICIAL community build — not affiliated with, endorsed by or supported by AmneziaVPN." \
       org.opencontainers.image.authors="Vadim Khristenko (VAI_PROG)" \
@@ -26,7 +29,8 @@ LABEL org.opencontainers.image.title="amnezia-wg-dns — tunnel-only resolver (u
       org.opencontainers.image.documentation="https://architect.vai-rice.space" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.base.name="docker.io/library/alpine:3.24" \
-      space.vai-rice.awg.dns-address="${AWG_DNS_ADDRESS}"
+      space.vai-rice.awg.dns-address="${AWG_DNS_ADDRESS}" \
+      space.vai-rice.awg.inputs="${INPUTS_DIGEST}"
 
 # unbound only. No dig, no bind-tools, no shell utilities beyond busybox: this
 # image exists to answer port 53 and nothing else, and every extra package is

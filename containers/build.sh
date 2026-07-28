@@ -33,6 +33,10 @@ TOOLS_TAG="${AWG_TOOLS_VERSION:-v1.0.20260618-2}"
 BUILD_DATE="${SOURCE_DATE_EPOCH:+$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)}"
 BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
+# See inputs-digest.sh: the same fingerprint the release pipeline compares
+# against, computed in one place so local builds and CI cannot disagree.
+inputs_digest() { ./inputs-digest.sh "$1" "${GO_TAG[$1]:--}"; }
+
 targets=("$@")
 if [ "${#targets[@]}" -eq 0 ]; then targets=(1.0 1.5 2.0 3.0 dns); fi
 
@@ -42,6 +46,7 @@ for v in "${targets[@]}"; do
         echo "==> $name  (unbound)"
         docker build -f Dockerfile.dns \
             --build-arg "BUILD_DATE=$BUILD_DATE" \
+            --build-arg "INPUTS_DIGEST=$(inputs_digest dns)" \
             -t "$name" .
         continue
     fi
@@ -53,5 +58,6 @@ for v in "${targets[@]}"; do
         --build-arg "AWG_TOOLS_VERSION=$TOOLS_TAG" \
         --build-arg "AWG_VERSION=$v" \
         --build-arg "BUILD_DATE=$BUILD_DATE" \
+        --build-arg "INPUTS_DIGEST=$(inputs_digest "$v")" \
         -t "$name" .
 done

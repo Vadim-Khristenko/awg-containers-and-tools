@@ -2,8 +2,8 @@ name: Release
 
 # Tag a commit to release it:
 #
-#     git tag -s v0.1.0 -m "v0.1.0"
-#     git push origin v0.1.0
+#     git tag -s v0.1.1 -m "v0.1.1"
+#     git push origin v0.1.1
 #
 # Images are pushed to Docker Hub only if both of these are configured:
 #   vars.DOCKERHUB_USERNAME     repository variable — the account (vaiprog)
@@ -22,8 +22,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Taken from the same variable the login uses, so the account we authenticate
-  # as and the account in the tag can never drift apart.
   REGISTRY_USER: ${{ vars.DOCKERHUB_USERNAME }}
 
 jobs:
@@ -64,8 +62,8 @@ jobs:
         include:
           - { os: ubuntu-latest,    target: x86_64-unknown-linux-gnu,  ext: "" }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, ext: "" }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc,   ext: ".exe" }
-          - { os: macos-latest,   target: aarch64-apple-darwin,     ext: "" }
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc,    ext: ".exe" }
+          - { os: macos-latest,     target: aarch64-apple-darwin,      ext: "" }
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal
@@ -87,7 +85,7 @@ jobs:
           path: dist/*
 
   publish-images:
-    name: Push ${{ matrix.image }}
+    name: Publish ${{ matrix.image }}
     needs: verify
     if: needs.verify.outputs.publish == 'true'
     runs-on: ubuntu-latest
@@ -95,63 +93,112 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { image: amnezia-wg-1,  awg: "1.0", go: v0.2.12 }
-          - { image: amnezia-wg-15, awg: "1.5", go: v0.2.14-beta-awg-1.5-1 }
-          - { image: amnezia-wg-2,  awg: "2.0", go: v0.2.19 }
-          - { image: amnezia-wg-3,  awg: "3.0", go: v3.0.2 }
+          - { image: amnezia-wg-1,   awg: "1.0", go: v0.2.12, file: Dockerfile }
+          - { image: amnezia-wg-15,  awg: "1.5", go: v0.2.14-beta-awg-1.5-1, file: Dockerfile }
+          - { image: amnezia-wg-2,   awg: "2.0", go: v0.2.19, file: Dockerfile }
+          - { image: amnezia-wg-3,   awg: "3.0", go: v3.0.2,  file: Dockerfile }
+          - { image: amnezia-wg-dns, awg: "dns", go: "-",     file: Dockerfile.dns }
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
-
       - uses: docker/login-action@v4
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v7
+      # Hash exactly the things that can change what ends up inside the image.
+      # A tag on its own is not evidence of a change: most releases touch the
+      # Rust side only, and rebuilding five identical images every time burns
+      # runner minutes, moves `latest` for no reason, and hands users a new
+      # digest to re-pull that contains nothing new.
+      - id: inputs
+        name: Fingerprint the build inputs
+        run: |
+          h=$(./containers/inputs-digest.sh "${{ matrix.awg }}" "${{ matrix.go }}")
+          echo "hash=$h" >> "$GITHUB_OUTPUT"
+          echo "fingerprint: $h"
+
+      - id: existing
+        name: What is published under :latest right now?
+        continue-on-error: true
+        run: |
+          ref="${{ env.REGISTRY_USER }}/${{ matrix.image }}:latest"
+          if docker pull -q "$ref" >/dev/null 2>&1; then
+            prev=$(docker inspect --format '{{ index .Config.Labels "space.vai-rice.awg.inputs" }}' "$ref" 2>/dev/null || true)
+            echo "previous=$prev" >> "$GITHUB_OUTPUT"
+            echo "published fingerprint: ${prev:-<none>}"
+          else
+            echo "previous=" >> "$GITHUB_OUTPUT"
+            echo "nothing published yet"
+          fi
+
+      - name: Build and push
+        if: steps.existing.outputs.previous != steps.inputs.outputs.hash
+        uses: docker/build-push-action@v7
         with:
           context: containers
+          file: containers/${{ matrix.file }}
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: |
             AWG_VERSION=${{ matrix.awg }}
             AWG_GO_VERSION=${{ matrix.go }}
+            INPUTS_DIGEST=${{ steps.inputs.outputs.hash }}
           tags: |
             ${{ env.REGISTRY_USER }}/${{ matrix.image }}:${{ github.ref_name }}
             ${{ env.REGISTRY_USER }}/${{ matrix.image }}:latest
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
-  publish-dns-image:
-    name: Push amnezia-wg-dns
-    needs: verify
+      # Unchanged: give the release its version tag without producing a second
+      # copy of identical bytes. imagetools points a new tag at the existing
+      # multi-arch index, so `:v0.1.1` and `:latest` share one digest.
+      - name: Re-tag the unchanged image
+        if: steps.existing.outputs.previous == steps.inputs.outputs.hash
+        run: |
+          docker buildx imagetools create \
+            -t "${{ env.REGISTRY_USER }}/${{ matrix.image }}:${{ github.ref_name }}" \
+            "${{ env.REGISTRY_USER }}/${{ matrix.image }}:latest"
+          echo "::notice::${{ matrix.image }} unchanged — tagged ${{ github.ref_name }} onto the existing digest"
+
+      - name: Record what happened
+        run: |
+          mkdir -p imginfo
+          if [ "${{ steps.existing.outputs.previous }}" = "${{ steps.inputs.outputs.hash }}" ]; then
+            state=unchanged
+          else
+            state=rebuilt
+          fi
+          digest=$(docker buildx imagetools inspect \
+            "${{ env.REGISTRY_USER }}/${{ matrix.image }}:${{ github.ref_name }}" \
+            --format '{{ .Manifest.Digest }}' 2>/dev/null || echo unknown)
+          printf '%s|%s|%s|%s\n' "${{ matrix.image }}" "${{ matrix.awg }}" "$state" "$digest" \
+            > "imginfo/${{ matrix.image }}.txt"
+          cat "imginfo/${{ matrix.image }}.txt"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: imginfo-${{ matrix.image }}
+          path: imginfo/*
+
+  hub-descriptions:
+    name: Docker Hub overviews
+    needs: [verify, publish-images]
     if: needs.verify.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/build-push-action@v7
-        with:
-          context: containers
-          file: containers/Dockerfile.dns
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ${{ env.REGISTRY_USER }}/amnezia-wg-dns:${{ github.ref_name }}
-            ${{ env.REGISTRY_USER }}/amnezia-wg-dns:latest
-          cache-from: type=gha,scope=dns
-          cache-to: type=gha,mode=max,scope=dns
+      - name: Push the overview pages
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: ./containers/hub/sync.sh
 
   release:
     name: GitHub release
-    needs: [binaries, publish-images, publish-dns-image]
-    # The publish jobs are skipped when there are no credentials, and a skipped
+    needs: [binaries, publish-images]
+    # The publish job is skipped when there are no credentials, and a skipped
     # dependency would skip this job too — so the condition is decided here.
     if: always() && needs.binaries.result == 'success'
     runs-on: ubuntu-latest
@@ -162,12 +209,18 @@ jobs:
 
       # The pattern is not optional. docker/build-push-action uploads a build
       # record artifact of its own for every image it pushes, and without a
-      # filter those land in the release next to the binaries and pollute
-      # SHA256SUMS.
+      # filter those land in the release next to the binaries.
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: awg-tool-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          path: imginfo
+          pattern: imginfo-*
           merge-multiple: true
 
       - name: Checksums
@@ -181,31 +234,58 @@ jobs:
           TAG: ${{ github.ref_name }}
           PUBLISHED: ${{ needs.publish-images.result }}
         run: |
-          if [ "$PUBLISHED" = "success" ]; then
-            cat > notes.md <<EOF
-          Images for this release are on Docker Hub:
+          {
+            echo "## Install"
+            echo
+            echo '```bash'
+            echo "docker pull ${REGISTRY_USER:-vaiprog}/amnezia-wg-3:$TAG"
+            echo '```'
+            echo
+            echo "Or take a binary below and run it with no arguments for the interactive UI."
+            echo
 
-          | Image | Protocol |
-          |---|---|
-          | \`vaiprog/amnezia-wg-1:$TAG\` | AWG 1.0 |
-          | \`vaiprog/amnezia-wg-15:$TAG\` | AWG 1.5 |
-          | \`vaiprog/amnezia-wg-2:$TAG\` | AWG 2.0 |
-          | \`vaiprog/amnezia-wg-3:$TAG\` | AWG 3.0 |
-          | \`vaiprog/amnezia-wg-dns:$TAG\` | resolver |
-          EOF
-          else
-            cat > notes.md <<'EOF'
-          Container images were **not** published for this tag: Docker Hub
-          credentials are not configured on this repository. Build them from
-          source with `containers/build.sh`.
-          EOF
-          fi
-          cat >> notes.md <<'EOF'
+            if [ "$PUBLISHED" = "success" ] && [ -d imginfo ] && [ -n "$(ls -A imginfo 2>/dev/null)" ]; then
+              echo "## Images"
+              echo
+              echo "| Image | Protocol | This release | Digest |"
+              echo "|---|---|---|---|"
+              for f in imginfo/*.txt; do
+                IFS='|' read -r image awg state digest < "$f"
+                case "$awg" in dns) proto="resolver" ;; *) proto="AWG $awg" ;; esac
+                case "$state" in
+                  unchanged) note="unchanged — re-tagged" ;;
+                  *)         note="rebuilt" ;;
+                esac
+                printf '| `%s/%s:%s` | %s | %s | `%s` |\n' \
+                  "${REGISTRY_USER:-vaiprog}" "$image" "$TAG" "$proto" "$note" "${digest:0:19}"
+              done
+              echo
+              echo "Images marked *unchanged* are the same bytes as the previous release under a new tag — nothing to re-pull."
+              echo
+            else
+              echo "## Images"
+              echo
+              echo "Container images were **not** published for this tag: Docker Hub credentials are not configured on this repository. Build them from source with \`containers/build.sh\`."
+              echo
+            fi
 
-          Binaries below are unsigned; verify them against `SHA256SUMS`.
-
-          Unofficial community build — not affiliated with AmneziaVPN.
-          EOF
+            echo "## Binaries"
+            echo
+            echo "| File | Size | SHA-256 |"
+            echo "|---|---|---|"
+            for f in artifacts/awg-tool-*; do
+              n=$(basename "$f")
+              printf '| `%s` | %s | `%s` |\n' \
+                "$n" "$(du -h "$f" | cut -f1)" "$(sha256sum "$f" | cut -c1-16)…"
+            done
+            echo
+            echo "Unsigned — verify against \`SHA256SUMS\`."
+            echo
+            echo "---"
+            echo
+            echo "Unofficial community build. Not affiliated with, endorsed by or supported by AmneziaVPN."
+          } > notes.md
+          cat notes.md
 
       - uses: softprops/action-gh-release@v3
         with:

@@ -1,0 +1,86 @@
+# AmneziaWG __AWG__ — self-hosted
+
+> **Unofficial community build.** Not affiliated with, endorsed by or supported by AmneziaVPN. Report problems at [the project repository](https://github.com/Vadim-Khristenko/awg-containers-and-tools/issues), not upstream.
+
+A single-purpose image that runs an **AmneziaWG __AWG__** endpoint — server or client — on `amneziawg-go __GOTAG__`.
+
+| | |
+|---|---|
+| Protocol | AmneziaWG __AWG__ |
+| Daemon | `amneziawg-go __GOTAG__` |
+| Base | Alpine |
+| Size | ~33 MB |
+| Platforms | `linux/amd64`, `linux/arm64` |
+| Source | [Vadim-Khristenko/awg-containers-and-tools](https://github.com/Vadim-Khristenko/awg-containers-and-tools) |
+| Licence | MIT |
+
+## Why this image exists
+
+Nothing upstream lets you self-host AmneziaWG 3.0. The official path configures tunnels through `awg-quick`, which hands the `.conf` to `awg setconf` — and that parser, in `amneziawg-tools`, still understands only the 2.0 key set. Give it a 3.0 config and it stops on the first line it does not know:
+
+```
+$ awg setconf awg0 awg0.conf
+Line unrecognized: `HeaderProtectionKey=...'
+Configuration parsing error
+```
+
+The daemon is fine. `amneziawg-go` implements 3.0 completely. Only the layer in front of it lags. So these images skip that layer and talk to the daemon over its UAPI socket, which accepts every 3.0 key today.
+
+The images for 1.0, 1.5 and 2.0 exist so the same tooling covers whatever your clients actually run.
+
+## Quick start
+
+```bash
+docker run -d --name awg \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun \
+  --sysctl net.ipv4.ip_forward=1 \
+  -p 51820:51820/udp \
+  -v $PWD/awg0.conf:/etc/amnezia/awg/awg0.conf:ro \
+  -v awg-state:/var/lib/awg \
+  vaiprog/__IMAGE__:latest
+```
+
+`NET_ADMIN` and `/dev/net/tun` are not optional — `amneziawg-go` is a userspace implementation and needs the tun device. The container is otherwise unprivileged, which is why `ip_forward` has to be handed in rather than set from inside.
+
+Generate the config with the companion tool, which knows each client's limits and the protocol's real constraints:
+
+```bash
+awg-tool gen --version __AWG__
+```
+
+The obfuscation parameters must be **identical on both ends** — they are a shared secret, and mismatched peers never complete a handshake. Generate the block once and paste the same one into the server and the client.
+
+## Managing peers
+
+```bash
+docker exec awg awg-peer add laptop     # prints a client config, once
+docker exec awg awg-peer list           # label, public key, address, last handshake
+docker exec awg awg-peer rm laptop      # revoke
+docker exec awg awg-uapi get            # raw daemon state
+```
+
+A peer's private key is generated inside the container, printed once and never written to disk.
+
+## DNS without leaks
+
+Pair this with `vaiprog/amnezia-wg-dns`, which sits on its own bridge at `172.29.172.254` and publishes no port. A client configured with `DNS = 172.29.172.254` can only be answered through the tunnel: a query that escapes it reaches nothing at all instead of quietly reaching your ISP's resolver.
+
+A ready `docker-compose.yml` with that arrangement is in the repository.
+
+## Every install is different
+
+The container does not ship a default parameter set, and the generator draws a new one per install. Shared parameters would give every server built this way one DPI fingerprint, and one signature would block all of them at once.
+
+## Tags
+
+`latest` tracks the newest release. Version tags such as `v0.1.0` are immutable — pin one if you want reproducible deployments.
+
+## Volumes
+
+| Path | What is lost without it |
+|---|---|
+| `/var/lib/awg` | peer records and the boot counter — a restart looks like a first start and peers vanish |
+| `/var/log/awg` | the operational event log |
+
+The event log records when the node came up, when the interface was configured, and who was granted or denied access. It carries no private keys, preshared keys or config bodies. It is still the list of who has access, so treat it as sensitive.
