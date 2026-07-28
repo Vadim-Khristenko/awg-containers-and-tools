@@ -342,9 +342,40 @@ fn cmd_tui(lang: Lang) {
 }
 
 fn cmd_donate(lang: Lang) {
+    use awg_core::support::{CRYPTO_WALLETS, FIAT_METHODS};
+
     banner(lang);
     println!();
     println!("{}", t(lang, K::DonateIntro));
+    println!();
+
+    println!("{}:", t(lang, K::DonateFiat));
+    for m in &FIAT_METHODS {
+        let note = if lang == Lang::Ru {
+            m.note_ru
+        } else {
+            m.note_en
+        };
+        println!("  {:<10} {:<24} {}", m.label, note, m.url);
+    }
+
+    println!();
+    println!("{}:", t(lang, K::DonateCrypto));
+    for w in &CRYPTO_WALLETS {
+        let net = if lang == Lang::Ru {
+            w.network_ru
+        } else {
+            w.network_en
+        };
+        println!("  {} · {}", w.ticker, net);
+        // On its own line and nothing else on it, so selecting the address with
+        // a mouse cannot pick up a label or a stray space along with it.
+        println!("    {}", w.address);
+    }
+    println!();
+    println!("  {}", t(lang, K::DonateNetworkWarn));
+
+    println!();
     println!("  {} — {ARCHITECT_URL}", t(lang, K::DonateArchitect));
     println!("  {} — {SOURCES_URL}", t(lang, K::DonateSources));
 }

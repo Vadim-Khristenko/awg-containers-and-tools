@@ -723,6 +723,75 @@ fn draw_prose(
     );
 }
 
+/// The support screen, laid out so an address can be selected on its own.
+///
+/// Each address sits alone on its line with nothing beside it: a label or a
+/// trailing space picked up by a mouse selection turns into a paste that goes
+/// nowhere, and with a crypto address there is nothing to undo.
+fn donate_lines(lang: Lang) -> Vec<Line<'static>> {
+    use awg_core::support::{ARCHITECT_URL, CRYPTO_WALLETS, FIAT_METHODS, SOURCES_URL};
+
+    let mut out = vec![
+        Line::from(Span::styled(
+            t(lang, K::DonateIntro).to_string(),
+            theme::base(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("{}:", t(lang, K::DonateFiat)),
+            theme::title(),
+        )),
+    ];
+    for m in &FIAT_METHODS {
+        let note = if lang == Lang::Ru {
+            m.note_ru
+        } else {
+            m.note_en
+        };
+        out.push(Line::from(vec![
+            Span::styled(format!("  {:<10}", m.label), theme::base()),
+            Span::styled(format!("{note:<24}"), theme::dim()),
+            Span::styled(m.url.to_string(), theme::warn()),
+        ]));
+    }
+
+    out.push(Line::from(""));
+    out.push(Line::from(Span::styled(
+        format!("{}:", t(lang, K::DonateCrypto)),
+        theme::title(),
+    )));
+    for w in &CRYPTO_WALLETS {
+        let net = if lang == Lang::Ru {
+            w.network_ru
+        } else {
+            w.network_en
+        };
+        out.push(Line::from(vec![
+            Span::styled(format!("  {:<6}", w.ticker), theme::warn()),
+            Span::styled(net.to_string(), theme::dim()),
+        ]));
+        out.push(Line::from(Span::styled(
+            format!("    {}", w.address),
+            theme::base(),
+        )));
+    }
+    out.push(Line::from(""));
+    out.push(Line::from(Span::styled(
+        format!("  {}", t(lang, K::DonateNetworkWarn)),
+        theme::warn(),
+    )));
+    out.push(Line::from(""));
+    out.push(Line::from(Span::styled(
+        format!("  {} — {ARCHITECT_URL}", t(lang, K::DonateArchitect)),
+        theme::dim(),
+    )));
+    out.push(Line::from(Span::styled(
+        format!("  {} — {SOURCES_URL}", t(lang, K::DonateSources)),
+        theme::dim(),
+    )));
+    out
+}
+
 fn prose(text: &str) -> Vec<Line<'static>> {
     text.lines()
         .map(|l| Line::from(Span::styled(l.to_string(), theme::base())))
@@ -841,12 +910,7 @@ fn draw(f: &mut ratatui::Frame, app: &App) {
             app,
             body,
             Screen::Donate.title(app.lang),
-            prose(&format!(
-                "{}\n\n  {} — https://architect.vai-rice.space\n  {} — https://github.com/Vadim-Khristenko/awg-containers-and-tools",
-                t(app.lang, K::DonateIntro),
-                t(app.lang, K::DonateArchitect),
-                t(app.lang, K::DonateSources)
-            )),
+            donate_lines(app.lang),
         ),
     }
 

@@ -12,6 +12,7 @@ pub mod platform;
 pub mod profile;
 pub mod render;
 pub mod rng;
+pub mod support;
 pub mod update;
 pub mod versions;
 pub mod vpn;
