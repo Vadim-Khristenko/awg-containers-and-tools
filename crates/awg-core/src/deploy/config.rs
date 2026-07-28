@@ -392,7 +392,11 @@ impl ContainerSpec {
 impl Default for ContainerSpec {
     fn default() -> Self {
         Self {
-            image: "awg3-server:latest".into(),
+            // A published name, not a local one. `awg3-server:latest` only
+            // exists on a machine that built it, and it also defeats the
+            // detection in `crate::docker`, which recognises our containers by
+            // image reference before falling back to a label.
+            image: "vaiprog/amnezia-wg-3:latest".into(),
             name: "awg3-server".into(),
             conf_dir: "/etc/amnezia/awg3".into(),
             restart: "unless-stopped".into(),
@@ -421,12 +425,23 @@ pub fn docker_run_command(spec: &ContainerSpec, net: &NetworkSpec) -> String {
             spec.conf_dir.trim_end_matches('/'),
             ContainerSpec::CONF_MOUNT
         ),
+        // Peer records and the boot counter. Without these the container is
+        // stateless in the worst way: recreating it silently revokes every peer
+        // `awg-peer` ever issued, and the only symptom is clients that quietly
+        // stop handshaking.
+        format!("-v {}-state:/var/lib/awg", spec.name),
+        format!("-v {}-log:/var/log/awg", spec.name),
         format!("-e AWG_IFACE={}", net.interface),
         format!(
             "-e AWG_CONF={}/{}",
             ContainerSpec::CONF_MOUNT,
             ContainerSpec::CONF_NAME
         ),
+        // Without this, configs issued by `awg-peer` inside the container carry
+        // a literal SERVER_PUBLIC_IP placeholder as their endpoint. The deploy
+        // already knows the real address, so there is no reason to make the
+        // operator paste it in afterwards.
+        format!("-e AWG_ENDPOINT={}", net.endpoint()),
     ];
     a.push(spec.image.clone());
     a.join(" ")
@@ -770,16 +785,35 @@ mod tests {
             "--sysctl net.ipv4.ip_forward=1",
             "-p 51820:51820/udp",
             "-v /etc/amnezia/awg3:/etc/amnezia/awg3:ro",
+            // Peers survive `docker rm` only because of these two.
+            "-v awg3-server-state:/var/lib/awg",
+            "-v awg3-server-log:/var/log/awg",
             "-e AWG_IFACE=awg0",
             "-e AWG_CONF=/etc/amnezia/awg3/server.conf",
-            "awg3-server:latest",
+            "-e AWG_ENDPOINT=95.85.30.7:51820",
+            "vaiprog/amnezia-wg-3:latest",
         ] {
             assert!(cmd.contains(expected), "missing {expected} in: {cmd}");
         }
         assert!(!cmd.contains("--privileged"), "privileged is never needed");
         assert!(!cmd.contains("--network host"));
         // The image must be the last word or docker reads it as an argument.
-        assert!(cmd.ends_with("awg3-server:latest"));
+        assert!(cmd.ends_with("vaiprog/amnezia-wg-3:latest"));
+    }
+
+    #[test]
+    fn the_default_image_is_one_that_actually_exists_and_is_recognised() {
+        // Two separate reasons, both learned the hard way: a local-only tag
+        // cannot be pulled on a fresh host, and container detection matches the
+        // image reference before it falls back to a label.
+        let spec = ContainerSpec::default();
+        assert!(spec.image.starts_with("vaiprog/amnezia-wg-"));
+        assert!(
+            crate::docker::parse_image_ref(&spec.image)
+                .map(|r| r.is_awg())
+                .unwrap_or(false),
+            "the deploy default must be detectable as one of ours"
+        );
     }
 
     #[test]
@@ -848,5 +882,161 @@ mod tests {
         let awg = &decoded["containers"][0]["awg"];
         assert_eq!(awg["config"].as_str().unwrap(), conf);
         assert_eq!(awg["Jc"].as_str().unwrap(), t.base.jc.to_string());
+    }
+
+    // ------------------------------------------------ once per server, not per client
+    //
+    // The obfuscation block is a *shared secret between the two ends*, not a
+    // per-client credential. Both peers must present the identical block or
+    // they never recognise each other's packets and the handshake times out
+    // with no error anywhere. So randomising it per client would be the bug —
+    // these tests pin the correct behaviour rather than describing an intent.
+
+    /// The fields `conf_obfuscation` in `containers/awg-peer` copies verbatim
+    /// out of the server config into every issued client config.
+    ///
+    /// Pinned here because that shell function and this renderer have to agree.
+    /// A field the renderer emits and the grep misses is a field the client
+    /// never receives — and, again, a handshake that simply never completes.
+    const PEER_TOOL_FIELDS: [&str; 24] = [
+        "H1",
+        "H2",
+        "H3",
+        "H4",
+        "S1",
+        "S2",
+        "S3",
+        "S4",
+        "Jc",
+        "Jmin",
+        "Jmax",
+        "I1",
+        "I2",
+        "I3",
+        "I4",
+        "I5",
+        "Itime",
+        "HeaderProtectionKey",
+        "ContentPaddingAddition",
+        "RekeyAfterTime",
+        "RekeyTimeout",
+        "RejectAfterTime",
+        "KeepaliveTimeout",
+        "MaxHandshakeAttempts",
+    ];
+
+    fn key_material(seed: u8) -> String {
+        B64.encode([seed; 32])
+    }
+
+    /// One client's worth of credentials, all of them distinct from every other
+    /// client's.
+    fn client_keys(n: u8) -> Keys {
+        Keys {
+            server_public: key_material(200),
+            client_private: key_material(n * 3 + 1),
+            client_public: key_material(n * 3 + 2),
+            preshared: Some(key_material(n * 3 + 3)),
+        }
+    }
+
+    fn client_net(n: u8) -> NetworkSpec {
+        NetworkSpec {
+            client_address: format!("10.8.1.{}/32", 2 + n),
+            ..spec()
+        }
+    }
+
+    #[test]
+    fn every_client_of_one_server_is_issued_the_identical_obfuscation_block() {
+        let t = tunnel(21);
+        let server =
+            crate::docker::obfuscation_from_conf(&server_conf(&spec(), &t, &client_keys(0)));
+        assert_eq!(
+            server.len(),
+            18,
+            "the 3.0 block is Jc/Jmin/Jmax, S1-S4, H1-H4, the header key, the padding range \
+             and five timer ranges"
+        );
+        for n in 0..6u8 {
+            let issued = crate::docker::obfuscation_from_conf(&client_conf(
+                &client_net(n),
+                &t,
+                &client_keys(n),
+            ));
+            assert_eq!(
+                issued, server,
+                "client {n} was issued a different obfuscation block from the server's"
+            );
+        }
+    }
+
+    #[test]
+    fn every_client_of_one_server_gets_its_own_credentials() {
+        let t = tunnel(22);
+        let confs: Vec<String> = (0..6u8)
+            .map(|n| client_conf(&client_net(n), &t, &client_keys(n)))
+            .collect();
+
+        // PresharedKey lives in [Peer] and the other two in [Interface], so
+        // this reads the whole file rather than one section of it.
+        let value = |conf: &str, field: &str| -> String {
+            conf.lines()
+                .filter_map(|l| l.split_once('='))
+                .find(|(k, _)| k.trim() == field)
+                .map(|(_, v)| v.trim().to_string())
+                .unwrap_or_else(|| panic!("no {field} in the issued config"))
+        };
+        for field in ["PrivateKey", "PresharedKey", "Address"] {
+            let unique: std::collections::BTreeSet<String> =
+                confs.iter().map(|c| value(c, field)).collect();
+            assert_eq!(unique.len(), confs.len(), "{field} repeats between clients");
+        }
+
+        // And one client's config never carries another's private key.
+        for (i, conf) in confs.iter().enumerate() {
+            for (j, other) in confs.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                let secret = interface_block(other)["PrivateKey"].clone();
+                assert!(
+                    !conf.contains(&secret),
+                    "client {i}'s config carries client {j}'s private key"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn two_installs_do_not_share_a_fingerprint() {
+        // Per *server*, not global: a shared parameter set would give every
+        // install built with this tool one DPI fingerprint.
+        let a = crate::docker::obfuscation_from_conf(&client_conf(&spec(), &tunnel(31), &keys()));
+        let b = crate::docker::obfuscation_from_conf(&client_conf(&spec(), &tunnel(32), &keys()));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn the_shell_peer_tool_copies_every_field_the_renderer_emits() {
+        // `awg-peer add` reissues the block by grepping the server config. If
+        // the renderer ever grows a field that grep does not name, the field
+        // silently stops reaching clients.
+        let server = interface_block(&server_conf(&spec(), &tunnel(33), &keys()));
+        let per_node = ["PrivateKey", "Address", "ListenPort", "MTU"];
+        for key in server.keys() {
+            assert!(
+                per_node.contains(&key.as_str()) || PEER_TOOL_FIELDS.contains(&key.as_str()),
+                "{key} is in the server config but containers/awg-peer does not copy it"
+            );
+        }
+        // ...and the shared block is not empty by accident.
+        assert!(
+            server
+                .keys()
+                .filter(|k| PEER_TOOL_FIELDS.contains(&k.as_str()))
+                .count()
+                >= 18
+        );
     }
 }
