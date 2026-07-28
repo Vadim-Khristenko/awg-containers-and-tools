@@ -2,8 +2,8 @@ name: Release
 
 # Tag a commit to release it:
 #
-#     git tag -s v0.1.1 -m "v0.1.1"
-#     git push origin v0.1.1
+#     git tag -s v0.2.0 -m "v0.2.0"
+#     git push origin v0.2.0
 #
 # Images are pushed to Docker Hub only if both of these are configured:
 #   vars.DOCKERHUB_USERNAME     repository variable — the account (vaiprog)
@@ -156,7 +156,7 @@ jobs:
 
       # Unchanged: give the release its version tag without producing a second
       # copy of identical bytes. imagetools points a new tag at the existing
-      # multi-arch index, so `:v0.1.1` and `:latest` share one digest.
+      # multi-arch index, so `:v0.2.0` and `:latest` share one digest.
       - name: Re-tag the unchanged image
         if: steps.existing.outputs.previous == steps.inputs.outputs.hash
         run: |
