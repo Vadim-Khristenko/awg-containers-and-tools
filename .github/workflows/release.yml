@@ -185,18 +185,10 @@ jobs:
           name: imginfo-${{ matrix.image }}
           path: imginfo/*
 
-  hub-descriptions:
-    name: Docker Hub overviews
-    needs: [verify, publish-images]
-    if: needs.verify.outputs.publish == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Push the overview pages
-        env:
-          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: bash containers/hub/sync.sh
+  # The Docker Hub overview pages are pushed by their own workflow, `hub.yml`.
+  # They were a job here until a 403 from Docker's login endpoint failed a
+  # release whose images had all published correctly — a release should be red
+  # because something shipped wrong, not because a description did not update.
 
   release:
     name: GitHub release

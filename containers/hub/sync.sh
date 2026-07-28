@@ -36,13 +36,28 @@ render_wg() {
     sed -e "s|__IMAGE__|$image|g" -e "s|__AWG__|$awg|g" -e "s|__GOTAG__|$gotag|g" wg.md.tmpl
 }
 
+# The bearer token, kept in a variable and never echoed: it grants writes to
+# every repository in the namespace.
+#
+# Note the endpoint. The older /v2/users/login/ now sits behind a bot challenge
+# and answers a non-browser POST with 403 and an HTML interstitial — which is
+# what broke the first release that tried this. /v2/auth/token is the documented
+# route for access tokens and is not challenged.
 token() {
-    # The short-lived JWT, exchanged for the access token. Kept in a variable
-    # and never echoed: it grants writes to every repository in the namespace.
-    curl -fsS -H "Content-Type: application/json" \
-        -d "$(jq -n --arg u "$NS" --arg p "$DOCKERHUB_TOKEN" \
-              '{username:$u, password:$p}')" \
-        https://hub.docker.com/v2/users/login/ | jq -r .token
+    local body code
+    body=$(jq -n --arg i "$NS" --arg s "$DOCKERHUB_TOKEN" '{identifier:$i, secret:$s}')
+    code=$(curl -sS -o /tmp/hub-token.$$ -w '%{http_code}' \
+        -H "Content-Type: application/json" -d "$body" \
+        https://hub.docker.com/v2/auth/token)
+    if [ "$code" != "200" ]; then
+        # Print the status and a short excerpt, never the request body.
+        echo "login failed: HTTP $code" >&2
+        head -c 200 "/tmp/hub-token.$$" >&2; echo >&2
+        rm -f "/tmp/hub-token.$$"
+        return 1
+    fi
+    jq -r .access_token < "/tmp/hub-token.$$"
+    rm -f "/tmp/hub-token.$$"
 }
 
 push() {
@@ -53,11 +68,17 @@ push() {
     fi
     local code
     code=$(jq -n --arg d "$short" --arg f "$body" '{description:$d, full_description:$f}' \
-        | curl -fsS -o /dev/null -w '%{http_code}' -X PATCH \
+        | curl -sS -o /tmp/hub-patch.$$ -w '%{http_code}' -X PATCH \
             -H "Content-Type: application/json" \
-            -H "Authorization: JWT $JWT" \
+            -H "Authorization: Bearer $JWT" \
             -d @- "https://hub.docker.com/v2/repositories/$NS/$repo/")
     echo "  $repo -> HTTP $code"
+    if [ "$code" != "200" ]; then
+        head -c 200 "/tmp/hub-patch.$$" >&2; echo >&2
+        rm -f "/tmp/hub-patch.$$"
+        return 1
+    fi
+    rm -f "/tmp/hub-patch.$$"
 }
 
 if [ "$DRY" = 0 ]; then

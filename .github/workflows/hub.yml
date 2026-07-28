@@ -1,0 +1,41 @@
+name: Docker Hub overviews
+
+# Push the overview pages that Docker Hub shows on each image.
+#
+# Its own workflow, and dispatchable by hand, for two reasons. Docker Hub
+# cannot read these from git, so they drift the moment someone edits a README
+# and does not tag a release — being able to sync without cutting a release is
+# the point. And a failure to update marketing copy should not turn a release
+# that actually shipped working images red, which is exactly what happened when
+# this lived inside the release pipeline.
+#
+# Needs vars.DOCKERHUB_USERNAME and secrets.DOCKERHUB_TOKEN.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    paths:
+      - containers/hub/**
+
+jobs:
+  overviews:
+    name: Push the overview pages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Are the credentials configured?
+        env:
+          USER_SET: ${{ vars.DOCKERHUB_USERNAME }}
+          TOKEN_SET: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$USER_SET" ] || [ -z "$TOKEN_SET" ]; then
+            echo "::error::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are not set"
+            exit 1
+          fi
+
+      - name: Sync
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: bash containers/hub/sync.sh
