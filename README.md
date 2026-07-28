@@ -24,6 +24,12 @@ The daemon itself is fine — `amneziawg-go` v3.0.2 implements 3.0 completely. O
 
 That is the whole trick. Everything else here is packaging, parameter generation and making it pleasant to use.
 
+### How it ended up like this
+
+It began as a small thing to make installing AmneziaWG less tedious — a wrapper around steps people were already doing by hand. Then it turned out nobody could self-host 3.0 at all, and, well, you only live once. So it grew up into the operator of its own stack: it builds the images, puts them on your server, issues the client configs and tells you when something is wrong with the result.
+
+Official self-hosted 3.0 will land upstream sooner or later. When it does, use it. Until then, this works.
+
 ## What you get
 
 | | |
@@ -31,7 +37,7 @@ That is the whole trick. Everything else here is packaging, parameter generation
 | **Four server images** | one per protocol generation, ~33 MB each |
 | **A DNS resolver image** | ~20 MB, reachable only from inside the tunnel |
 | **`awg-tool`** | generates parameters, exports `.conf` and `vpn://`, installs servers over SSH |
-| **A TUI** | the same thing with arrow keys, if you prefer |
+| **An interactive UI** | run `awg-tool` with no arguments |
 
 Images are published on Docker Hub under [`vaiprog`](https://hub.docker.com/u/vaiprog):
 
@@ -75,12 +81,35 @@ docker compose exec server awg-peer add laptop
 ### Install on a remote server over SSH
 
 ```bash
-awg-tool install
+awg-tool install --host 203.0.113.9 --user root --key ~/.ssh/id_ed25519
 ```
 
-It asks for the address, how to log in (password, key file, agent, or a saved profile), then looks at what the machine is running. It knows the twelve most common distributions and falls back through `ID_LIKE` for derivatives, so Zorin gets treated as Ubuntu and CachyOS as Arch. If something is missing it tells you the exact install command before running anything. On NixOS it stops and hands you a `configuration.nix` snippet instead, because installing packages imperatively there would not survive the next rebuild.
+It looks at the machine before it changes anything: which distribution, whether docker is usable and whether it needs `sudo`, and what address clients should be pointed at. It knows the twelve most common distributions and falls back through `ID_LIKE` for derivatives, so Zorin is treated as Ubuntu and CachyOS as Arch.
 
-Connection profiles are saved so the second run is one keystroke. Passwords are only written to disk if you ask for it.
+If a package is missing it prints the exact command and asks before running it. On NixOS it stops and hands you a `configuration.nix` snippet instead, because installing packages imperatively there would not survive the next rebuild.
+
+If something is already listening on the tunnel port it tells you what, and stops. It will not kill another process for you — picking a free port with `--listen-port` costs one flag, and killing the wrong thing costs a server.
+
+When it finishes you get the client `.conf` and the `vpn://` link on stdout.
+
+The survey makes no outbound connections *from* your server: the endpoint address comes from the default route's source, not from an echo service. And `sudo docker info` is only attempted if the unprivileged call already failed — a needless `sudo` is how a survey trips an audit alert on someone else's machine.
+
+Connection profiles are saved so the second run is `--server NAME`. Passwords only reach the disk if you ask for that.
+
+### Managing what is already there
+
+```bash
+awg-tool status --server home     # what is running, peers, handshakes, traffic
+awg-tool doctor                   # why is it not carrying traffic?
+awg-tool logs --lines 200         # the log, with key material stripped out
+awg-tool update                   # is the tool, or an image, out of date?
+```
+
+`status` finds our containers by image reference, so a node someone renamed is still found, and a container that is not ours is not touched.
+
+`doctor` returns a verdict with a confidence level, the evidence behind it and the next step — not a wall of log text. It distinguishes a missing `/dev/net/tun` from a missing `NET_ADMIN` from `ip_forward` being off from a peer that has simply never handshaked, and when the evidence cannot separate two causes it says so and lists both instead of picking the likelier one.
+
+`logs` redacts on the way out of the library, not at the print site: private keys, pre-shared keys and header-protection keys cannot cross that boundary, so the output is safe to paste somewhere.
 
 ### Just generate a config
 
@@ -191,11 +220,16 @@ cd containers
 
 ## Status
 
-Working today: the CLI, the TUI, all four container images, SSH installation, server management, both export formats.
+Working today: parameter generation for all four versions, the interactive UI, all five container images, SSH deployment, container discovery, health, diagnosis, redacted logs, update checks, and both export formats.
 
 Planned: a web UI, WASM builds, Android builds.
 
-This is release `0.1.0`. The protocol handling is tested (194 tests) and the containers are verified against live tunnels, but the tool is young — please report what breaks.
+This is release `0.1.1`. There are 318 tests, and the containers are verified against live tunnels rather than smoke tests — but the tool is young, so please report what breaks.
+
+Known limits, so they are not a surprise:
+
+- The UI connects to saved profiles that need no password, or whose password you chose to store. Anything else is a command away, and the screen says so.
+- If the tunnel port is taken, the tool tells you what holds it and stops. It will not kill it for you.
 
 ## Contributing
 
