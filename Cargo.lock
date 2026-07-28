@@ -55,7 +55,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "awg-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "awg-core",
  "crossterm",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "awg-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64 0.23.0",
  "flate2",

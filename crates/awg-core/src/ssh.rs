@@ -41,6 +41,28 @@ pub use ssh2::Session;
 /// is worse than a failed one.
 const TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How long a *command* may take, which is a different question entirely.
+///
+/// Twenty seconds is right for a handshake and hopelessly wrong for the work:
+/// `apt-get install docker.io` on a fresh machine runs for minutes, and pulling
+/// an image over a thin link longer still. Leaving the connect timeout in force
+/// for execution meant the very first useful thing the tool does — installing
+/// what the target is missing — could never finish. It failed with "Timed out
+/// waiting on socket" after twenty seconds, while apt carried on working on the
+/// far side, so the machine was left half-changed with no record of it.
+///
+/// Still bounded, because a command that has hung for half an hour is hung.
+const EXEC_TIMEOUT: Duration = Duration::from_secs(1800);
+
+/// Run `f` with the session's timeout widened to suit a long command, and put
+/// the connect timeout back afterwards however it returns.
+fn with_exec_timeout<T>(sess: &Session, f: impl FnOnce() -> T) -> T {
+    sess.set_timeout(EXEC_TIMEOUT.as_millis() as u32);
+    let out = f();
+    sess.set_timeout(TIMEOUT.as_millis() as u32);
+    out
+}
+
 #[cfg(unix)]
 const DIR_MODE: u32 = 0o700;
 #[cfg(unix)]
@@ -523,12 +545,14 @@ fn authenticate(sess: &Session, profile: &Profile, secret: Option<&str>) -> Resu
 /// A non-zero exit code is data, not an error: callers routinely probe with
 /// commands that are expected to fail.
 pub fn exec(sess: &Session, cmd: &str) -> Result<(String, String, i32)> {
-    let mut ch = sess
-        .channel_session()
-        .map_err(|e| Error::Ssh(format!("could not open a channel: {e}")))?;
-    ch.exec(cmd)
-        .map_err(|e| Error::Ssh(format!("could not run `{cmd}`: {e}")))?;
-    finish(ch, cmd)
+    with_exec_timeout(sess, || {
+        let mut ch = sess
+            .channel_session()
+            .map_err(|e| Error::Ssh(format!("could not open a channel: {e}")))?;
+        ch.exec(cmd)
+            .map_err(|e| Error::Ssh(format!("could not run `{cmd}`: {e}")))?;
+        finish(ch, cmd)
+    })
 }
 
 /// Run a command under `sudo`, feeding it the password over stdin.
@@ -538,24 +562,26 @@ pub fn exec_sudo(
     sudo_password: Option<&str>,
 ) -> Result<(String, String, i32)> {
     let wrapped = sudo_command(cmd);
-    let mut ch = sess
-        .channel_session()
-        .map_err(|e| Error::Ssh(format!("could not open a channel: {e}")))?;
-    ch.exec(&wrapped)
-        .map_err(|e| Error::Ssh(format!("could not run `{wrapped}`: {e}")))?;
+    with_exec_timeout(sess, || {
+        let mut ch = sess
+            .channel_session()
+            .map_err(|e| Error::Ssh(format!("could not open a channel: {e}")))?;
+        ch.exec(&wrapped)
+            .map_err(|e| Error::Ssh(format!("could not run `{wrapped}`: {e}")))?;
 
-    if let Some(pw) = sudo_password {
-        ch.write_all(pw.as_bytes())
-            .and_then(|()| ch.write_all(b"\n"))
-            .and_then(|()| ch.flush())
-            .map_err(|e| Error::Ssh(format!("could not send the sudo password: {e}")))?;
-    }
-    // sudo reads stdin until EOF; without this it waits for input that is never
-    // coming and the command hangs until the timeout.
-    ch.send_eof()
-        .map_err(|e| Error::Ssh(format!("could not close stdin: {e}")))?;
+        if let Some(pw) = sudo_password {
+            ch.write_all(pw.as_bytes())
+                .and_then(|()| ch.write_all(b"\n"))
+                .and_then(|()| ch.flush())
+                .map_err(|e| Error::Ssh(format!("could not send the sudo password: {e}")))?;
+        }
+        // sudo reads stdin until EOF; without this it waits for input that is
+        // never coming and the command hangs until the timeout.
+        ch.send_eof()
+            .map_err(|e| Error::Ssh(format!("could not close stdin: {e}")))?;
 
-    finish(ch, &wrapped)
+        finish(ch, &wrapped)
+    })
 }
 
 /// Build the `sudo` invocation.

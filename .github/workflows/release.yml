@@ -218,11 +218,21 @@ jobs:
           pattern: imginfo-*
           merge-multiple: true
 
+      # Named after the tag, so several releases downloaded into one directory
+      # do not overwrite each other's checksums — and so the verify command
+      # says which release it is verifying.
+      #
+      # Written outside the directory and moved in: `sha256sum * > file` in
+      # place works only because the glob expands before the redirect creates
+      # the file, and a leftover from an earlier run would quietly checksum
+      # itself.
       - name: Checksums
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          cd artifacts
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
+          ( cd artifacts && sha256sum awg-tool-* ) > "checksums-${TAG}.sha256"
+          mv "checksums-${TAG}.sha256" artifacts/
+          cat "artifacts/checksums-${TAG}.sha256"
 
       - name: Compose the notes
         env:
@@ -274,7 +284,11 @@ jobs:
                 "$n" "$(du -h "$f" | cut -f1)" "$(sha256sum "$f" | cut -c1-16)…"
             done
             echo
-            echo "Unsigned — verify against \`SHA256SUMS\`."
+            echo "Unsigned. Verify what you downloaded:"
+            echo
+            echo '```bash'
+            echo "sha256sum -c checksums-$TAG.sha256"
+            echo '```'
             echo
             echo "---"
             echo

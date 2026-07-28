@@ -105,21 +105,13 @@ pub fn resolve(args: &[String], lang: Lang) -> Result<Target, String> {
         None
     };
 
-    // Logging in as root, or with docker reachable directly, needs none of
-    // this — so nothing is asked for.
-    let sudo_password = if profile.sudo_required && profile.user != "root" {
-        match &profile.auth {
-            // Signed in with a password: the account password is almost always
-            // the same one sudo wants, and asking twice for the same string is
-            // its own kind of user-hostile.
-            Auth::Password => secret.clone(),
-            _ => Some(
-                prompt_secret(&format!("{} {}: ", t(lang, K::PromptSudo), profile.user))
-                    .map_err(|e| e.to_string())?,
-            ),
-        }
-    } else {
-        None
+    // Signing in with a password: sudo almost always wants the same one, and
+    // asking twice for one string is its own kind of user-hostile. Anything
+    // else waits — see `sudo_password`, which asks only once it knows sudo
+    // actually needs a password on this host.
+    let sudo_password = match &profile.auth {
+        Auth::Password => secret.clone(),
+        _ => None,
     };
 
     Ok(Target {
@@ -127,6 +119,30 @@ pub fn resolve(args: &[String], lang: Lang) -> Result<Target, String> {
         secret,
         sudo_password,
     })
+}
+
+/// The password `sudo -S` will need on this host, asked for only if it will.
+///
+/// Probed rather than assumed. Plenty of servers are set up with `NOPASSWD`,
+/// and prompting there asks for something the machine does not want, blocks a
+/// scripted run, and teaches the user that the tool asks for passwords it has
+/// no use for.
+pub fn sudo_password(session: &Session, target: &Target, lang: Lang) -> Option<String> {
+    if !target.profile.sudo_required || target.profile.user == "root" {
+        return None;
+    }
+    if let Ok((.., 0)) = ssh::exec(session, "sudo -n true 2>/dev/null") {
+        return None;
+    }
+    if target.sudo_password.is_some() {
+        return target.sudo_password.clone();
+    }
+    prompt_secret(&format!(
+        "{} {}: ",
+        t(lang, K::PromptSudo),
+        target.profile.user
+    ))
+    .ok()
 }
 
 /// Connect, asking about an unrecognised host the way ssh does.
