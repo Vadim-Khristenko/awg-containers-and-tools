@@ -187,6 +187,17 @@ strings! {
     AskRunIt => ("Run that?", "Выполнить?"),
     MsgAborted => ("nothing was changed", "ничего не изменено"),
     MsgInstallFailed => ("the install command failed", "команда установки не отработала"),
+    MsgRechecking => ("Looking again, now that it is installed…", "Смотрю ещё раз, теперь уже с установленным…"),
+    MsgDockerStillUnusable => (
+        "docker is still not usable after the install; check `systemctl status docker` on that host",
+        "docker после установки всё ещё недоступен; посмотрите `systemctl status docker` на том хосте"
+    ),
+    DonateCrypto => ("Crypto", "Криптовалюты"),
+    DonateFiat => ("Cards and recurring", "Карты и регулярная поддержка"),
+    DonateNetworkWarn => (
+        "Send on the network named beside each address. The wrong network is unrecoverable.",
+        "Отправляйте по той сети, что указана рядом с адресом. Не та сеть — деньги не вернуть."
+    ),
     MsgPortBusy => ("something is already listening on", "на этом порту уже кто-то слушает"),
     MsgPickAnotherPort => (
         "pass --listen-port with a free one; nothing here will kill another process for you",

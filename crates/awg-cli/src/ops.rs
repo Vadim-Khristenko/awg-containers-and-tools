@@ -49,10 +49,13 @@ fn survey(args: &[String], lang: Lang) -> (Connected, Vec<Container>) {
         target.profile.host
     );
     let session = remote::connect(&target, lang).unwrap_or_else(|e| fail(e));
+    // Asked before the session moves into `Connected`, and only if the host
+    // turns out to want it.
+    let sudo_password = remote::sudo_password(&session, &target, lang);
     let c = Connected {
         session,
         sudo: target.profile.sudo_required,
-        sudo_password: target.sudo_password.clone(),
+        sudo_password,
     };
     let found = docker::find_awg_containers(&c.host()).unwrap_or_else(|e| fail(e.to_string()));
     (c, found)
@@ -158,6 +161,13 @@ pub fn cmd_logs(args: &[String], lang: Lang) {
     let (conn, found) = survey(args, lang);
     let host = conn.host();
     let wanted = positional(args);
+
+    // Said out loud, like the other commands. Printing nothing at all reads as
+    // "the logs are empty", which is a different and much more worrying thing.
+    if found.is_empty() {
+        println!("{}", t(lang, K::MsgNoContainers));
+        return;
+    }
 
     for c in pick(&found, wanted.as_deref(), lang) {
         println!("── {} ──", c.name);
@@ -304,7 +314,8 @@ pub fn cmd_install(args: &[String], lang: Lang) {
     let session = remote::connect(&target, lang).unwrap_or_else(|e| fail(e));
     // What `sudo -S` reads, which is not what SSH authenticated with. See
     // `remote::Target`.
-    let secret = target.sudo_password.as_deref();
+    let sudo_pw = remote::sudo_password(&session, &target, lang);
+    let secret = sudo_pw.as_deref();
 
     // ── look before touching ──
     eprintln!("{}", t(lang, K::MsgSurveying));
@@ -323,6 +334,7 @@ pub fn cmd_install(args: &[String], lang: Lang) {
         println!("  {:<12} {}", t(lang, K::LblAddress), ip.address);
     }
 
+    let mut s = s;
     match prepare::plan_preparation(&s.distro, &s.missing, None) {
         prepare::Preparation::Ready => {}
         prepare::Preparation::Install { cmd, packages } => {
@@ -336,6 +348,20 @@ pub fn cmd_install(args: &[String], lang: Lang) {
                 ssh::exec_sudo(&session, &cmd, secret).unwrap_or_else(|e| fail(e.to_string()));
             if code != 0 {
                 fail(format!("{}: {}", t(lang, K::MsgInstallFailed), err.trim()));
+            }
+            // Look again. The survey was taken before any of this ran, so it
+            // still says docker is absent — and handing that to the deploy
+            // makes it refuse to touch a machine that now has everything it
+            // asked for. Installing something and then acting on what was true
+            // beforehand is its own class of bug.
+            eprintln!("{}", t(lang, K::MsgRechecking));
+            s = survey::survey_from_probes(&probe(&session, secret));
+            if !s.docker.is_usable() {
+                fail(format!(
+                    "{}: {:?}",
+                    t(lang, K::MsgDockerStillUnusable),
+                    s.docker
+                ));
             }
         }
         // NixOS and anything else that cannot be provisioned by running a
