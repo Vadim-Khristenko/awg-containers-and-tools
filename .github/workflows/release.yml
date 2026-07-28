@@ -160,9 +160,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The pattern is not optional. docker/build-push-action uploads a build
+      # record artifact of its own for every image it pushes, and without a
+      # filter those land in the release next to the binaries and pollute
+      # SHA256SUMS.
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
+          pattern: awg-tool-*
           merge-multiple: true
 
       - name: Checksums
