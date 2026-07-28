@@ -9,8 +9,11 @@
 #   DOCKERHUB_USERNAME=vaiprog DOCKERHUB_TOKEN=... ./sync.sh
 #   ./sync.sh --dry-run          render everything, send nothing
 #
-# The token needs write access to the repositories. Nothing here reads the
-# images themselves — it only writes text.
+# The token must be scoped **Read, Write & Delete**. Editing repository
+# metadata is not covered by "Read & Write", which authenticates happily and
+# then answers 403 "insufficient scope" — a failure that looks like a wrong
+# password and is not one. Nothing here reads or writes an image; it only
+# writes text.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -75,6 +78,14 @@ push() {
     echo "  $repo -> HTTP $code"
     if [ "$code" != "200" ]; then
         head -c 200 "/tmp/hub-patch.$$" >&2; echo >&2
+        # Worth naming, because the message alone sends people looking at the
+        # wrong thing: the token authenticated fine, it simply is not allowed
+        # to edit repository metadata. Docker Hub grants that only to a token
+        # scoped Read, Write & Delete — "Read & Write" is not enough.
+        if [ "$code" = "403" ]; then
+            echo "  the token authenticated but may not edit repository metadata." >&2
+            echo "  Docker Hub needs a token scoped 'Read, Write & Delete' for this." >&2
+        fi
         rm -f "/tmp/hub-patch.$$"
         return 1
     fi
