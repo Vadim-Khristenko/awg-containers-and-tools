@@ -12,11 +12,15 @@ pub mod platform;
 pub mod profile;
 pub mod render;
 pub mod rng;
+pub mod update;
 pub mod versions;
 pub mod vpn;
 
 // WASM has no sockets and no OpenSSL to link; there the crate simply has no
-// transport rather than one that compiles and cannot work.
+// transport rather than one that compiles and cannot work. The same goes for
+// `docker`, which is nothing but commands sent down that transport.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod docker;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ssh;
 
