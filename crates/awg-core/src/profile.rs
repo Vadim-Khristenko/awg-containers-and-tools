@@ -123,10 +123,33 @@ pub fn default_config_dir() -> Result<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(xdg).join("awg-tool"));
     }
-    let home = std::env::var_os("HOME")
+    // Windows sets neither of those. It has APPDATA, which is where an
+    // application's own settings belong, so use it rather than inventing a
+    // dot-directory in the user's profile.
+    if cfg!(windows)
+        && let Some(appdata) = std::env::var_os("APPDATA").filter(|v| !v.is_empty())
+    {
+        return Ok(PathBuf::from(appdata).join("awg-tool"));
+    }
+    let home = home_dir().ok_or_else(|| {
+        Error::Config(
+            "no home directory: none of XDG_CONFIG_HOME, APPDATA, HOME or USERPROFILE is set"
+                .into(),
+        )
+    })?;
+    Ok(home.join(".config").join("awg-tool"))
+}
+
+/// The user's home, on either kind of system.
+///
+/// `HOME` is not set on Windows outside of a POSIX shell, which is why the
+/// first version of this refused to run there at all — with an error naming
+/// two variables that Windows has never had.
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
         .filter(|v| !v.is_empty())
-        .ok_or_else(|| Error::Config("neither XDG_CONFIG_HOME nor HOME is set".into()))?;
-    Ok(PathBuf::from(home).join(".config").join("awg-tool"))
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()))
+        .map(PathBuf::from)
 }
 
 pub fn profiles_path(base: &Path) -> PathBuf {
@@ -316,6 +339,32 @@ fn io_err(path: &Path, what: &str, e: std::io::Error) -> Error {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Where settings and known_hosts live has to resolve on the machine the
+    /// test is running on, whichever that is.
+    ///
+    /// This is the test that was missing. The first version looked only at
+    /// XDG_CONFIG_HOME and HOME — neither of which Windows sets — so every
+    /// command that touched a profile died there with an error naming two
+    /// variables that platform has never had. It passed CI the whole time,
+    /// because CI is Linux.
+    #[test]
+    fn the_config_directory_resolves_on_this_platform() {
+        let dir = default_config_dir().expect("no config directory on this platform");
+        assert!(dir.is_absolute(), "not absolute: {}", dir.display());
+        assert!(dir.ends_with("awg-tool"), "{}", dir.display());
+
+        let kh = crate::ssh::default_known_hosts_path().expect("no known_hosts path");
+        assert!(kh.ends_with("known_hosts"), "{}", kh.display());
+    }
+
+    #[test]
+    fn a_home_is_found_under_either_platforms_variable() {
+        assert!(
+            home_dir().is_some(),
+            "no home from HOME or USERPROFILE — one of them is always set"
+        );
+    }
 
     /// A scratch directory that is deliberately *not* created up front, so the
     /// missing-directory path is what the tests exercise by default. Nothing

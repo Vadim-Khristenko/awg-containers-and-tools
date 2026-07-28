@@ -209,10 +209,13 @@ fn parse_host_field(field: &str) -> Option<HostField> {
 
 /// `~/.ssh/known_hosts`.
 pub fn default_known_hosts_path() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| Error::Ssh("HOME is not set, cannot find known_hosts".into()))?;
-    Ok(PathBuf::from(home).join(".ssh").join("known_hosts"))
+    // `~/.ssh/known_hosts` on both kinds of system: Windows OpenSSH uses
+    // %USERPROFILE%\.ssh too, so the file is shared with whatever ssh client
+    // the user already trusts hosts with.
+    let home = crate::profile::home_dir().ok_or_else(|| {
+        Error::Ssh("no home directory: neither HOME nor USERPROFILE is set".into())
+    })?;
+    Ok(home.join(".ssh").join("known_hosts"))
 }
 
 /// Read and parse `known_hosts`.

@@ -32,6 +32,23 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  # Linux-only CI is how a bug that only exists on Windows ships: the tool
+  # resolved its config directory from HOME, which Windows does not set, so
+  # every command touching a saved profile failed there while CI stayed green.
+  # Building for Windows in the release job was not enough — nothing ran.
+  cross:
+    name: Tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
   scripts:
     name: Scripts
     runs-on: ubuntu-latest

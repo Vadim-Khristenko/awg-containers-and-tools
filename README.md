@@ -224,7 +224,7 @@ Working today: parameter generation for all four versions, the interactive UI, a
 
 Planned: a web UI, WASM builds, Android builds.
 
-This is release `0.2.0`. There are 318 tests, and the containers are verified against live tunnels rather than smoke tests — but the tool is young, so please report what breaks.
+This is release `0.2.1`. There are 318 tests, and the containers are verified against live tunnels rather than smoke tests — but the tool is young, so please report what breaks.
 
 Known limits, so they are not a surprise:
 
