@@ -115,7 +115,10 @@ jobs:
       - id: inputs
         name: Fingerprint the build inputs
         run: |
-          h=$(./containers/inputs-digest.sh "${{ matrix.awg }}" "${{ matrix.go }}")
+          # Invoked through `sh` rather than as `./…`: the exec bit is a git
+          # index attribute that a Windows checkout cannot express, and a
+          # release should not fail on where the commit was authored.
+          h=$(sh containers/inputs-digest.sh "${{ matrix.awg }}" "${{ matrix.go }}")
           echo "hash=$h" >> "$GITHUB_OUTPUT"
           echo "fingerprint: $h"
 
@@ -193,7 +196,7 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: ./containers/hub/sync.sh
+        run: bash containers/hub/sync.sh
 
   release:
     name: GitHub release

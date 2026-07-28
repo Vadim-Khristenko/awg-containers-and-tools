@@ -32,6 +32,33 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  scripts:
+    name: Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # A script committed without its exec bit works for whoever added it and
+      # fails everywhere else. Git records the mode; a Windows working copy
+      # cannot, so it has to be checked rather than assumed.
+      - name: Every script is executable
+        run: |
+          bad=$(git ls-files -s containers/ \
+            | awk '$1 != "100755" && ($4 ~ /\.sh$/ || $4 ~ /awg-(peer|uapi)$/) { print $4 }')
+          if [ -n "$bad" ]; then
+            echo "not executable in the index:"; echo "$bad"
+            echo "fix with: git update-index --chmod=+x <file>"
+            exit 1
+          fi
+          echo "all executable"
+
+      - name: Shell syntax
+        run: |
+          for f in $(git ls-files 'containers/**' | grep -E '\.sh$|awg-peer$|awg-uapi$'); do
+            bash -n "$f" || exit 1
+          done
+          echo "all parse"
+
   images:
     name: Build ${{ matrix.image }}
     runs-on: ubuntu-latest
