@@ -1,6 +1,6 @@
 //! Where to send money, if it helped.
 //!
-//! The same set the AmneziaWG Architect site shows, kept here so the tool does
+//! The same set the Any Tech ARCHITECT site shows, kept here so the tool does
 //! not send people to a web page to find out how to support the thing they are
 //! already running.
 //!

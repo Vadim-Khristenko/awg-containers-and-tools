@@ -251,12 +251,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) ([по-русски](RU.CONTRIBUTING.MD))
 awg-tool donate
 ```
 
-Prints the same cards, recurring options and crypto addresses that [AmneziaWG Architect](https://architect.vai-rice.space) lists, so you do not have to go and find a web page to support something you are already running. Each address is on a line of its own, so selecting one cannot pick up a label along with it.
+Prints the same cards, recurring options and crypto addresses that [Any Tech ARCHITECT](https://architect.vai-rice.space) lists, so you do not have to go and find a web page to support something you are already running. Each address is on a line of its own, so selecting one cannot pick up a label along with it.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
 
-Parameter-generation logic is shared with [AmneziaWG Architect](https://github.com/Vadim-Khristenko/AmneziaWG-Architect). A joint release of AmneziaWG Architect and VAIEXIA.
+Parameter-generation logic is shared with [Any Tech ARCHITECT](https://github.com/Vadim-Khristenko/Any-Tech-ARCHITECT). A joint release of Any Tech ARCHITECT and VAIEXIA.
 
 Built by Vadim Khristenko (VAI_PROG).

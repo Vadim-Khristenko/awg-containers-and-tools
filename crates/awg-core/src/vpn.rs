@@ -1,6 +1,6 @@
 //! `vpn://` links — the format the Amnezia client imports.
 //!
-//! Wire format, matching `AmneziaWG-Architect/src/utils/mergekeys.ts`:
+//! Wire format, matching `Any-Tech-ARCHITECT/src/utils/mergekeys.ts`:
 //!
 //! ```text
 //! vpn:// + base64url( 4-byte big-endian original length + zlib(JSON) )

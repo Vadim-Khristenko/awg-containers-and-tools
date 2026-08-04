@@ -1,4 +1,4 @@
-//! The AmneziaWG Architect palette, transcribed for a terminal.
+//! The Any Tech ARCHITECT palette, transcribed for a terminal.
 //!
 //! Values come from `assets/main.css` in the Architect repository — the "Rich
 //! Dark Amber / Technical Precision" set — so the two halves of the release

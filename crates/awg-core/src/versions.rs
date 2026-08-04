@@ -1,6 +1,6 @@
 //! Protocol versions, client capabilities, and generation that respects both.
 //!
-//! Ported from `AmneziaWG-Architect/src/utils/generator/` — `index.ts` for the
+//! Ported from `Any-Tech-ARCHITECT/src/utils/generator/` — `index.ts` for the
 //! assembly, `clients.ts` for the capability matrix, `validators.ts` for the
 //! findings and `render.ts` for the per-version line list.
 //!

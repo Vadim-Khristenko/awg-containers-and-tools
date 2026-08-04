@@ -1,6 +1,6 @@
 //! One builder per protocol the I1 packet can pretend to be.
 //!
-//! Ported from `AmneziaWG-Architect/src/utils/generator/profiles/*.ts`. The
+//! Ported from `Any-Tech-ARCHITECT/src/utils/generator/profiles/*.ts`. The
 //! draws are kept in the same order as the TypeScript, so the two can be
 //! compared draw-for-draw if the pools ever need re-verifying.
 //!

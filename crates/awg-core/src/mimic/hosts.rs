@@ -1,6 +1,6 @@
 //! Host pools for the mimicry profiles.
 //!
-//! Transcribed from `AmneziaWG-Architect/src/utils/generator/constants.ts`.
+//! Transcribed from `Any-Tech-ARCHITECT/src/utils/generator/constants.ts`.
 //! The names are not decoration: a DNS query embeds the chosen name verbatim,
 //! and every other profile derives its SNI-placeholder length from it, so the
 //! length distribution of the pool is part of what the chain imitates.

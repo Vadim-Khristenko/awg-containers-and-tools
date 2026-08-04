@@ -51,7 +51,7 @@ Every one of these was found by a daemon refusing a config, not by reading a spe
 
 **Do not log secrets.** The event log is meant to be shareable with someone helping you debug. Keys, pre-shared keys and header-protection keys must never reach it.
 
-**Do not retune the terminal palette.** `crates/awg-cli/src/theme.rs` is the AmneziaWG Architect palette transcribed for a terminal, and a test pins the key values. The two halves of the release are meant to look like one product; a tidy-up here quietly splits them. If Architect's palette changes, change it here to match and say so in the commit.
+**Do not retune the terminal palette.** `crates/awg-cli/src/theme.rs` is the Any Tech ARCHITECT palette transcribed for a terminal, and a test pins the key values. The two halves of the release are meant to look like one product; a tidy-up here quietly splits them. If Architect's palette changes, change it here to match and say so in the commit.
 
 ## Tests
 

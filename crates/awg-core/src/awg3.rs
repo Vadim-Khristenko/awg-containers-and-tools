@@ -1,6 +1,6 @@
 //! AmneziaWG 3.0 parameter generation.
 //!
-//! Ported from `AmneziaWG-Architect/src/utils/generator/awg3.ts`, which was in
+//! Ported from `Any-Tech-ARCHITECT/src/utils/generator/awg3.ts`, which was in
 //! turn derived from the protocol implementation rather than the docs (the docs
 //! still describe 2.0):
 //!

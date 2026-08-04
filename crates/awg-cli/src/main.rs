@@ -1,6 +1,6 @@
 //! `awg-tool` — the command surface.
 //!
-//! Part of a joint release by AmneziaWG Architect and VAIEXIA.
+//! Part of a joint release by Any Tech ARCHITECT and VAIEXIA.
 //!
 //! Arguments are parsed by hand rather than with clap: the binary ships inside
 //! minimal containers, and the flag set is small enough that a dependency-free

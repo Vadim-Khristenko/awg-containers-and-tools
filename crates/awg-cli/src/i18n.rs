@@ -52,8 +52,8 @@ strings! {
         "Контейнеры и инструменты AmneziaWG — генерация, проверка и развёртывание AWG 1.0 / 1.5 / 2.0 / 3.0"
     ),
     JointRelease => (
-        "A joint release of AmneziaWG Architect and VAIEXIA",
-        "Совместный релиз AmneziaWG Architect и VAIEXIA"
+        "A joint release of Any Tech ARCHITECT and VAIEXIA",
+        "Совместный релиз Any Tech ARCHITECT и VAIEXIA"
     ),
     AboutVaiexia => (
         "VAIEXIA — free, self-hostable server and VPN management, all in Rust + WASM.\nInstall any package to your server from anywhere and connect to it.\nBe simple, be powerful.",

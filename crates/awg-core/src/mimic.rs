@@ -6,7 +6,7 @@
 //! [`profiles`] builds one packet per protocol worth imitating; this module
 //! assembles the five of them.
 //!
-//! Ported from `AmneziaWG-Architect/src/utils/generator/` — `profiles/*.ts` for
+//! Ported from `Any-Tech-ARCHITECT/src/utils/generator/` — `profiles/*.ts` for
 //! the packet shapes, `utils.ts` for the padding arithmetic, `constants.ts` for
 //! the host pools and browser tables, and the `genCfg` chain assembly in
 //! `index.ts`.

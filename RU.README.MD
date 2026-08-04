@@ -251,12 +251,12 @@ sha256sum -c checksums-v0.2.2.sha256
 awg-tool donate
 ```
 
-Печатает те же карты, регулярные способы и криптоадреса, что перечислены в [AmneziaWG Architect](https://architect.vai-rice.space), — чтобы поддержать то, что у вас уже работает, не приходилось искать веб-страницу. Каждый адрес стоит на отдельной строке: выделение мышкой не должно прихватить вместе с ним подпись.
+Печатает те же карты, регулярные способы и криптоадреса, что перечислены в [Any Tech ARCHITECT](https://architect.vai-rice.space), — чтобы поддержать то, что у вас уже работает, не приходилось искать веб-страницу. Каждый адрес стоит на отдельной строке: выделение мышкой не должно прихватить вместе с ним подпись.
 
 ## Лицензия
 
 MIT — см. [LICENSE](LICENSE).
 
-Логика генерации параметров общая с [AmneziaWG Architect](https://github.com/Vadim-Khristenko/AmneziaWG-Architect). Совместный релиз AmneziaWG Architect и VAIEXIA.
+Логика генерации параметров общая с [Any Tech ARCHITECT](https://github.com/Vadim-Khristenko/Any-Tech-ARCHITECT). Совместный релиз Any Tech ARCHITECT и VAIEXIA.
 
 Автор — Вадим Христенко (VAI_PROG).
