@@ -11,7 +11,7 @@ on:
 
 jobs:
   tunnels:
-    name: All four generations
+    name: All five generations
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -29,6 +29,14 @@ jobs:
       - name: Make sure the scripts are runnable
         run: chmod +x containers/*.sh containers/awg-peer containers/awg-uapi
 
+      # The self test drives the tunnel through awg-tool, and the binary has
+      # to exist before the first tunnel comes up. This was the quiet killer
+      # of every scheduled run: the images built fine, and then selftest.sh
+      # died on a path that nothing in this workflow had ever produced. The
+      # debug profile is enough — these are live checks, not benchmarks.
+      - name: Build awg-tool
+        run: cargo build --workspace
+
       - name: Build images
         run: cd containers && ./build.sh
 
@@ -37,7 +45,7 @@ jobs:
       - name: Self test
         run: cd containers && sudo ./selftest.sh
 
-      - name: All four at once
+      - name: All five at once
         run: cd containers && sudo ./paralleltest.sh
 
       - name: DNS leak protection
