@@ -644,9 +644,9 @@ mod sha1 {
         }
         msg.extend_from_slice(&bits.to_be_bytes());
 
-        for block in msg.chunks_exact(BLOCK) {
+        for block in msg.as_chunks::<BLOCK>().0 {
             let mut w = [0u32; 80];
-            for (i, c) in block.chunks_exact(4).enumerate() {
+            for (i, c) in block.as_chunks::<4>().0.iter().enumerate() {
                 w[i] = u32::from_be_bytes([c[0], c[1], c[2], c[3]]);
             }
             for i in 16..80 {
