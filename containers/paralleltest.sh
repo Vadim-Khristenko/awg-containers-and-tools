@@ -1,37 +1,38 @@
 #!/usr/bin/env bash
-# All four AmneziaWG generations on one host at the same time.
+# All five AmneziaWG generations on one host at the same time.
 #
 #   ./paralleltest.sh
 #
-# Not four runs of selftest.sh in sequence — that proves nothing about
+# Not five runs of selftest.sh in sequence — that proves nothing about
 # interference. Everything is stood up first, and only then is every tunnel
-# checked, so each check happens with the other three running. The transfers are
+# checked, so each check happens with the other four running. The transfers are
 # started together on purpose.
 #
 # What is deliberately made distinct, and what would collide if it were not:
 #
-#   listen port     51821..51824      published on the host; two services cannot
+#   listen port     51821..51825      published on the host; two services cannot
 #                                     bind the same UDP port, so this one is real
-#   tunnel subnet   10.20{1..4}.0/24  overlapping tunnels would send a packet
+#   tunnel subnet   10.20{1..5}.0/24  overlapping tunnels would send a packet
 #                                     down whichever interface matched first
-#   interface name  awg1 awg15 awg2 awg3
-#   transport net   172.30.1{1..4}.0/24
+#   interface name  awg1 awg15 awg2 awg3 awg31
+#   transport net   172.30.1{1..5}.0/24
 #   fwmark / table  default to the listen port (see entrypoint.sh) rather than a
 #                   constant, which is what makes host-network operation safe
 set -uo pipefail
 
 PREFIX="${AWG_IMAGE_PREFIX:-vaiprog/}"
-VERSIONS=(1.0 1.5 2.0 3.0)
+VERSIONS=(1.0 1.5 2.0 3.0 3.1)
 declare -A IMG=(
     [1.0]=${PREFIX}amnezia-wg-1:latest
     [1.5]=${PREFIX}amnezia-wg-15:latest
     [2.0]=${PREFIX}amnezia-wg-2:latest
     [3.0]=${PREFIX}amnezia-wg-3:latest
+    [3.1]=${PREFIX}amnezia-wg-31:latest
 )
-declare -A IFACE=([1.0]=awg1 [1.5]=awg15 [2.0]=awg2 [3.0]=awg3)
-declare -A PORT=( [1.0]=51821 [1.5]=51822 [2.0]=51823 [3.0]=51824)
-declare -A TUN=(  [1.0]=10.201 [1.5]=10.202 [2.0]=10.203 [3.0]=10.204)
-declare -A XNET=( [1.0]=172.30.11 [1.5]=172.30.12 [2.0]=172.30.13 [3.0]=172.30.14)
+declare -A IFACE=([1.0]=awg1 [1.5]=awg15 [2.0]=awg2 [3.0]=awg3 [3.1]=awg31)
+declare -A PORT=( [1.0]=51821 [1.5]=51822 [2.0]=51823 [3.0]=51824 [3.1]=51825)
+declare -A TUN=(  [1.0]=10.201 [1.5]=10.202 [2.0]=10.203 [3.0]=10.204 [3.1]=10.205)
+declare -A XNET=( [1.0]=172.30.11 [1.5]=172.30.12 [2.0]=172.30.13 [3.0]=172.30.14 [3.1]=172.30.15)
 
 WORK=
 AWG_TOOL=${AWG_TOOL:-$(dirname "$0")/../target/debug/awg-tool}

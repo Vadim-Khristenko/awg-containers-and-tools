@@ -3,7 +3,7 @@
 # proves it works: UAPI acceptance, handshake, traffic. Removes everything it
 # made when it is done.
 #
-#   ./selftest.sh 3.0        # or 1.0 / 1.5 / 2.0; default 3.0
+#   ./selftest.sh 3.1        # or 1.0 / 1.5 / 2.0 / 3.0; default 3.0
 set -uo pipefail
 
 V=${1:-3.0}
@@ -13,7 +13,8 @@ case "$V" in
     1.5) IMG=${PREFIX}amnezia-wg-15:latest ;;
     2.0) IMG=${PREFIX}amnezia-wg-2:latest  ;;
     3.0) IMG=${PREFIX}amnezia-wg-3:latest  ;;
-    *)   echo "usage: $0 [1.0|1.5|2.0|3.0]" >&2; exit 2 ;;
+    3.1) IMG=${PREFIX}amnezia-wg-31:latest ;;
+    *)   echo "usage: $0 [1.0|1.5|2.0|3.0|3.1]" >&2; exit 2 ;;
 esac
 
 NET=awgselftest

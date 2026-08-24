@@ -255,6 +255,11 @@ fn cmd_gen(args: &[String], lang: Lang) {
         intensity,
         client,
         router_mode,
+        // The 3.1 switches. Both default off, and the capability gate inside
+        // generate() eats them on anything older than 3.1 — a flag on a 3.0
+        // run is silently a no-op rather than a config the device refuses.
+        random_trailers: has_flag(args, "--random-trailers"),
+        disable_cookies: has_flag(args, "--disable-cookies"),
         mimic: MimicOptions {
             mtu,
             mimic_all: has_flag(args, "--mimic-all"),

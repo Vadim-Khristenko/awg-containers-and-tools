@@ -1,6 +1,6 @@
 # AmneziaWG Containers and Tools
 
-Self-hosted AmneziaWG servers for **every** protocol generation — 1.0, 1.5, 2.0 and **3.0** — as small container images, plus a Rust CLI that generates the obfuscation parameters and can install a server on a remote machine over SSH.
+Self-hosted AmneziaWG servers for **every** protocol generation — 1.0, 1.5, 2.0, **3.0** and **3.1** — as small container images, plus a Rust CLI that generates the obfuscation parameters and can install a server on a remote machine over SSH.
 
 **Русская версия: [RU.README.MD](RU.README.MD)**
 
@@ -47,9 +47,10 @@ Images are published on Docker Hub under [`vaiprog`](https://hub.docker.com/u/va
 | `vaiprog/amnezia-wg-15` | AWG 1.5 | amneziawg-go v0.2.14-beta-awg-1.5-1 |
 | `vaiprog/amnezia-wg-2` | AWG 2.0 | amneziawg-go v0.2.19 |
 | `vaiprog/amnezia-wg-3` | AWG 3.0 | amneziawg-go v3.0.2 |
+| `vaiprog/amnezia-wg-31` | AWG 3.1 | amneziawg-go v3.1.20260814 |
 | `vaiprog/amnezia-wg-dns` | — | unbound |
 
-All four run side by side on one host without stepping on each other.
+All five run side by side on one host without stepping on each other.
 
 ---
 
@@ -117,6 +118,8 @@ awg-tool update                   # is the tool, or an image, out of date?
 awg-tool gen --version 3.0 --profile quic --client amneziavpn
 awg-tool gen --version 2.0 --client amneziawg-windows --browser chrome
 awg-tool gen --version 3.0 --uapi          # UAPI lines instead of .conf
+awg-tool gen --version 3.1 --random-trailers   # the 3.1 switches, off by default
+awg-tool gen --version 3.1 --disable-cookies   # breaks NAT keepalive under load — know why before using
 ```
 
 ---
@@ -214,13 +217,13 @@ cd containers
 ./selftest.sh        # brings up a real tunnel per generation and proves it carries traffic
 ```
 
-`selftest.sh` is not a smoke test — it establishes a handshake, pushes data through and compares checksums on the far side, for each of the four generations.
+`selftest.sh` is not a smoke test — it establishes a handshake, pushes data through and compares checksums on the far side, for each of the five generations.
 
 ---
 
 ## Status
 
-Working today: parameter generation for all four versions, the interactive UI, all five container images, SSH deployment, container discovery, health, diagnosis, redacted logs, update checks, and both export formats.
+Working today: parameter generation for all five versions, the interactive UI, all six container images, SSH deployment, container discovery, health, diagnosis, redacted logs, update checks, and both export formats.
 
 Planned: a web UI, WASM builds, Android builds.
 

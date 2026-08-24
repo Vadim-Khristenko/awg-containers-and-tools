@@ -2,9 +2,9 @@
 # Builds one image per AmneziaWG protocol generation from the single Dockerfile,
 # plus the tunnel-only resolver.
 #
-#   ./build.sh            all four, plus dns
-#   ./build.sh 3.0 2.0    just those
-#   ./build.sh dns        just the resolver
+#   ./build.sh               all five, plus dns
+#   ./build.sh 3.1 3.0 2.0   just those
+#   ./build.sh dns           just the resolver
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -14,6 +14,7 @@ declare -A GO_TAG=(
     [1.5]=v0.2.14-beta-awg-1.5-1
     [2.0]=v0.2.19
     [3.0]=v3.0.2
+    [3.1]=v3.1.20260814
 )
 # Docker Hub names. The major number is spelled without its dot: a repository
 # path segment containing one reads as a registry host, so `amnezia-wg-1.5`
@@ -23,6 +24,7 @@ declare -A IMAGE=(
     [1.5]=amnezia-wg-15
     [2.0]=amnezia-wg-2
     [3.0]=amnezia-wg-3
+    [3.1]=amnezia-wg-31
     [dns]=amnezia-wg-dns
 )
 

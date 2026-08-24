@@ -73,7 +73,7 @@ impl std::fmt::Display for UintRange {
     }
 }
 
-/// The 3.0-only block of a config.
+/// The 3.x block of a config.
 #[derive(Debug, Clone, Default)]
 pub struct Awg3Params {
     /// 32 raw bytes. Rendered base64 in `.conf`, hex over UAPI.
@@ -84,6 +84,11 @@ pub struct Awg3Params {
     pub reject_after_time: Option<UintRange>,
     pub keepalive_timeout: Option<UintRange>,
     pub max_handshake_attempts: Option<UintRange>,
+    /// 3.1: a random-length trailer on every outgoing packet. A plain switch,
+    /// not a range — the daemon parses it with `boolf`.
+    pub random_trailers: bool,
+    /// 3.1: the device stays silent instead of sending cookie replies.
+    pub disable_cookies: bool,
 }
 
 impl Awg3Params {
@@ -91,6 +96,11 @@ impl Awg3Params {
         self.header_protection_key.is_none()
             && self.content_padding_addition.is_none()
             && self.rekey_after_time.is_none()
+            // The switches read false when off, and an off switch is not a
+            // parameter: a 3.1 config with both down is wire-identical to a
+            // 3.0 one and must not pretend otherwise.
+            && !self.random_trailers
+            && !self.disable_cookies
     }
 
     /// Check the invariants the daemon relies on but does not enforce.
@@ -190,6 +200,11 @@ pub struct Awg3Options {
     pub header_protection: bool,
     pub content_padding: bool,
     pub random_timings: bool,
+    /// 3.1 only; the caller gates on the version, this just records the wish.
+    pub random_trailers: bool,
+    /// 3.1 only. Off by default everywhere: without cookie replies, keepalive
+    /// behind NAT breaks under load.
+    pub disable_cookies: bool,
     pub intensity: Intensity,
     pub router_mode: bool,
 }
@@ -200,6 +215,8 @@ impl Default for Awg3Options {
             header_protection: true,
             content_padding: true,
             random_timings: true,
+            random_trailers: false,
+            disable_cookies: false,
             intensity: Intensity::Medium,
             router_mode: false,
         }
@@ -224,6 +241,8 @@ pub fn generate(rng: &mut impl Rng, opts: Awg3Options) -> Result<Awg3Params> {
         p.content_padding_addition =
             Some(gen_content_padding(rng, opts.intensity, opts.router_mode));
     }
+    p.random_trailers = opts.random_trailers;
+    p.disable_cookies = opts.disable_cookies;
 
     p.validate()?;
     Ok(p)

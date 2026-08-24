@@ -40,6 +40,14 @@ pub fn awg3_conf_lines(p: &Awg3Params) -> Vec<String> {
             out.push(format!("{name} = {r}"));
         }
     }
+    // The 3.1 switches, written only when on: a 3.0 device refuses both keys
+    // at config parse, and an off switch says nothing worth a line.
+    if p.random_trailers {
+        out.push("RandomTrailers = true".into());
+    }
+    if p.disable_cookies {
+        out.push("DisableCookies = true".into());
+    }
     out
 }
 
@@ -64,6 +72,14 @@ pub fn awg3_uapi_lines(p: &Awg3Params) -> Vec<String> {
         if let Some(r) = val {
             out.push(format!("{name}={r}"));
         }
+    }
+    // The 3.1 switches. Key names from `amneziawg-go` v3.1 `device/uapi.go`,
+    // both parsed with `boolf`: `1` is what the daemon expects for on.
+    if p.random_trailers {
+        out.push("random_trailers=1".into());
+    }
+    if p.disable_cookies {
+        out.push("disable_cookies=1".into());
     }
     out
 }

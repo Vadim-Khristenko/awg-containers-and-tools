@@ -13,6 +13,7 @@
 #   AWG 1.5  -> amneziawg-go v0.2.14-beta-awg-1.5-1  + I1-I5 special junk, Itime
 #   AWG 2.0  -> amneziawg-go v0.2.19                 + S3/S4, H1-H4 as ranges, tagged I chains
 #   AWG 3.0  -> amneziawg-go v3.0.2                  + HeaderProtectionKey, ContentPaddingAddition, timer ranges
+#   AWG 3.1  -> amneziawg-go v3.1.20260814           + RandomTrailers, DisableCookies (UAPI: random_trailers/disable_cookies)
 #
 # Tags verified against `git ls-remote` and the `case "..."` list in
 # device/uapi.go at each tag; see containers/README.md.

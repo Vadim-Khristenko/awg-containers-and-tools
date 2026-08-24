@@ -43,14 +43,16 @@ pub enum AwgVersion {
     V1_5,
     V2_0,
     V3_0,
+    V3_1,
 }
 
 impl AwgVersion {
-    pub const ALL: [AwgVersion; 4] = [
+    pub const ALL: [AwgVersion; 5] = [
         AwgVersion::V1_0,
         AwgVersion::V1_5,
         AwgVersion::V2_0,
         AwgVersion::V3_0,
+        AwgVersion::V3_1,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -59,6 +61,7 @@ impl AwgVersion {
             AwgVersion::V1_5 => "1.5",
             AwgVersion::V2_0 => "2.0",
             AwgVersion::V3_0 => "3.0",
+            AwgVersion::V3_1 => "3.1",
         }
     }
 
@@ -113,7 +116,7 @@ impl AwgVersion {
         match self {
             AwgVersion::V1_0 => NONE,
             AwgVersion::V1_5 => V15,
-            AwgVersion::V2_0 | AwgVersion::V3_0 => V20,
+            AwgVersion::V2_0 | AwgVersion::V3_0 | AwgVersion::V3_1 => V20,
         }
     }
 
@@ -142,7 +145,18 @@ impl AwgVersion {
     }
 
     pub fn supports_awg3(&self) -> bool {
-        *self == AwgVersion::V3_0
+        *self >= AwgVersion::V3_0
+    }
+
+    /// The 3.1 switches: RandomTrailers and DisableCookies.
+    ///
+    /// Both keys are new vocabulary — a 3.0 device refuses them at config
+    /// parse (`amneziawg-tools` `master` `src/config.c` knows neither), so
+    /// they are emitted only where the version reads them. Verified against
+    /// the `amneziawg-go` v3.1 tags: `random_trailers` and `disable_cookies`
+    /// in `device/uapi.go`, both boolean.
+    pub fn supports_feature_flags(&self) -> bool {
+        *self >= AwgVersion::V3_1
     }
 
     /// Exactly the `.conf` keys this version defines — no more, no fewer.
@@ -180,11 +194,39 @@ impl AwgVersion {
             "KeepaliveTimeout",
             "MaxHandshakeAttempts",
         ];
+        const V31: &[&str] = &[
+            "H1",
+            "H2",
+            "H3",
+            "H4",
+            "S1",
+            "S2",
+            "S3",
+            "S4",
+            "Jc",
+            "Jmin",
+            "Jmax",
+            "I1",
+            "I2",
+            "I3",
+            "I4",
+            "I5",
+            "HeaderProtectionKey",
+            "ContentPaddingAddition",
+            "RekeyAfterTime",
+            "RekeyTimeout",
+            "RejectAfterTime",
+            "KeepaliveTimeout",
+            "MaxHandshakeAttempts",
+            "RandomTrailers",
+            "DisableCookies",
+        ];
         match self {
             AwgVersion::V1_0 => BASE_1X,
             AwgVersion::V1_5 => V15,
             AwgVersion::V2_0 => V20,
             AwgVersion::V3_0 => V30,
+            AwgVersion::V3_1 => V31,
         }
     }
 }
@@ -545,6 +587,13 @@ pub struct GenOptions {
     pub header_protection: bool,
     pub content_padding: bool,
     pub random_timings: bool,
+    /// 3.1 only: a random-length trailer on every outgoing packet.
+    pub random_trailers: bool,
+    /// 3.1 only: the device stays silent instead of sending cookie replies.
+    /// Off by default — without cookies, keepalive behind NAT breaks under
+    /// load, and a server that quietly breaks tunnels is worse than one the
+    /// operator turns on knowingly.
+    pub disable_cookies: bool,
     /// Low-power router: fewer junk packets, smaller padding, I1 only.
     pub router_mode: bool,
 }
@@ -560,6 +609,8 @@ impl Default for GenOptions {
             header_protection: true,
             content_padding: true,
             random_timings: true,
+            random_trailers: false,
+            disable_cookies: false,
             router_mode: false,
         }
     }
@@ -686,6 +737,10 @@ pub fn generate(rng: &mut impl Rng, opts: &GenOptions) -> Result<VersionedParams
                 header_protection: opts.header_protection,
                 content_padding: opts.content_padding,
                 random_timings: opts.random_timings,
+                // The 3.1 switches exist only where the version reads them:
+                // a 3.0 device refuses both keys at config parse.
+                random_trailers: opts.random_trailers && opts.version.supports_feature_flags(),
+                disable_cookies: opts.disable_cookies && opts.version.supports_feature_flags(),
                 intensity: opts.intensity,
                 router_mode: opts.router_mode,
             },
@@ -1033,6 +1088,11 @@ mod tests {
             &mut SeededRng::new(seed),
             &GenOptions {
                 version,
+                // The 3.1 switches must be on for the field-set test to see
+                // them: a config with both off is wire-identical to a 3.0 one
+                // and renders exactly the 3.0 field list.
+                random_trailers: version.supports_feature_flags(),
+                disable_cookies: version.supports_feature_flags(),
                 ..Default::default()
             },
         )
@@ -1069,6 +1129,55 @@ mod tests {
             let expected: BTreeSet<String> = v.fields().iter().map(|s| (*s).to_string()).collect();
             assert_eq!(rendered, expected, "AWG {v} field set");
         }
+    }
+
+    #[test]
+    fn v31_switches_render_only_when_on_and_only_for_31() {
+        // On, on a version that reads them: both keys, in the .conf and over
+        // UAPI in the daemon's own spelling.
+        let p = make(AwgVersion::V3_1, 7);
+        let conf = p.conf_lines().join("\n");
+        assert!(conf.contains("RandomTrailers = true"), "{conf}");
+        assert!(conf.contains("DisableCookies = true"), "{conf}");
+        let uapi = p.uapi_lines().join("\n");
+        assert!(uapi.contains("random_trailers=1"), "{uapi}");
+        assert!(uapi.contains("disable_cookies=1"), "{uapi}");
+
+        // Off: neither spelling anywhere — a 3.1 config with both switches
+        // down is wire-identical to a 3.0 one and must look like it.
+        let quiet = generate(
+            &mut SeededRng::new(7),
+            &GenOptions {
+                version: AwgVersion::V3_1,
+                ..Default::default()
+            },
+        )
+        .expect("generation must satisfy its own validator");
+        let conf = quiet.conf_lines().join("\n");
+        assert!(!conf.contains("RandomTrailers"), "{conf}");
+        assert!(!conf.contains("DisableCookies"), "{conf}");
+        assert!(
+            !quiet
+                .uapi_lines()
+                .iter()
+                .any(|l| l.contains("random_trailers") || l.contains("disable_cookies"))
+        );
+
+        // Asked for on a 3.0 generation: the capability gate eats the wish —
+        // a 3.0 device refuses both keys at config parse.
+        let v30 = generate(
+            &mut SeededRng::new(7),
+            &GenOptions {
+                version: AwgVersion::V3_0,
+                random_trailers: true,
+                disable_cookies: true,
+                ..Default::default()
+            },
+        )
+        .expect("generation must satisfy its own validator");
+        let conf = v30.conf_lines().join("\n");
+        assert!(!conf.contains("RandomTrailers"), "{conf}");
+        assert!(!conf.contains("DisableCookies"), "{conf}");
     }
 
     #[test]

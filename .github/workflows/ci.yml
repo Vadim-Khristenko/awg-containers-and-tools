@@ -87,6 +87,7 @@ jobs:
           - { image: amnezia-wg-15, awg: "1.5", go: v0.2.14-beta-awg-1.5-1 }
           - { image: amnezia-wg-2,  awg: "2.0", go: v0.2.19 }
           - { image: amnezia-wg-3,  awg: "3.0", go: v3.0.2 }
+          - { image: amnezia-wg-31, awg: "3.1", go: v3.1.20260814 }
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4

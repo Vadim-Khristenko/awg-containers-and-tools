@@ -24,7 +24,7 @@ case "$V" in
     1.5) IMG=${PREFIX}amnezia-wg-15:latest ;;
     2.0) IMG=${PREFIX}amnezia-wg-2:latest  ;;
     3.0) IMG=${PREFIX}amnezia-wg-3:latest  ;;
-    *)   echo "usage: $0 [1.0|1.5|2.0|3.0]" >&2; exit 2 ;;
+    3.1) IMG=${PREFIX}amnezia-wg-31:latest ;;
 esac
 DNSIMG=${PREFIX}amnezia-wg-dns:latest
 
