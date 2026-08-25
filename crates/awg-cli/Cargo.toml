@@ -13,5 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 awg-core = { workspace = true }
+serde_json = { workspace = true }
 ratatui = "0.30"
 crossterm = "0.29"

@@ -48,8 +48,8 @@ macro_rules! strings {
 
 strings! {
     Tagline => (
-        "AmneziaWG containers and tools — generate, validate and deploy AWG 1.0 / 1.5 / 2.0 / 3.0",
-        "Контейнеры и инструменты AmneziaWG — генерация, проверка и развёртывание AWG 1.0 / 1.5 / 2.0 / 3.0"
+        "AmneziaWG containers and tools — generate, validate and deploy AWG 1.0 through 3.1",
+        "Контейнеры и инструменты AmneziaWG — генерация, проверка и развёртывание AWG 1.0–3.1"
     ),
     JointRelease => (
         "A joint release of Any Tech ARCHITECT and VAIEXIA",
@@ -72,8 +72,18 @@ strings! {
     CmdInstall => ("deploy a server over SSH (interactive)", "развернуть сервер по SSH (интерактивно)"),
     CmdDonate => ("support the project", "поддержать проект"),
     CmdAbout => ("about this tool", "о программе"),
-    OptVersion => ("protocol version: 1.0 | 1.5 | 2.0 | 3.0", "версия протокола: 1.0 | 1.5 | 2.0 | 3.0"),
+    OptVersion => ("protocol version: 1.0 | 1.5 | 2.0 | 3.0 | 3.1", "версия протокола: 1.0 | 1.5 | 2.0 | 3.0 | 3.1"),
     OptUapi => ("emit UAPI lines instead of .conf", "вывести строки UAPI вместо .conf"),
+    OptJson => ("emit the config as JSON, for scripts", "выдать конфиг в JSON — для скриптов"),
+    OptOut => ("write the result to a file instead of stdout", "записать результат в файл вместо stdout"),
+    OptRandomTrailers => (
+        "3.1: a random-length trailer on every outgoing packet",
+        "3.1: случайный по длине хвост у каждого исходящего пакета"
+    ),
+    OptDisableCookies => (
+        "3.1: never send cookie replies (breaks NAT keepalive under load)",
+        "3.1: не отправлять cookie-ответы (ломает keepalive за NAT под нагрузкой)"
+    ),
     OptIntensity => ("obfuscation intensity: low | medium | high", "интенсивность обфускации: low | medium | high"),
     OptRouter => ("low-power router mode (minimal noise)", "режим слабого роутера (минимум шума)"),
     OptLang => ("interface language: en | ru", "язык интерфейса: en | ru"),
@@ -88,8 +98,8 @@ strings! {
     DonateArchitect => ("Config generator", "Генератор конфигураций"),
     DonateSources => ("Sources and issues", "Исходники и баг-репорты"),
     AboutAwg3 => (
-        "AWG 3.0 support exists here because upstream ships no self-hosted 3.0:\nthe server pipeline drives awg-quick, and amneziawg-tools still parses only\nthe 2.0 keys. The daemon does understand 3.0, so this tool configures it\nover UAPI directly.",
-        "Поддержка AWG 3.0 здесь появилась потому, что у апстрима нет self-hosted 3.0:\nсерверный конвейер работает через awg-quick, а amneziawg-tools до сих пор\nразбирает только ключи 2.0. Сам демон 3.0 понимает — поэтому мы настраиваем\nего напрямую через UAPI."
+        "AWG 3.x support exists here because upstream ships no self-hosted 3.x:\nthe server pipeline drives awg-quick, and amneziawg-tools still parses only\nthe 2.0 keys. The daemon does understand 3.0 and 3.1, so this tool\nconfigures it over UAPI directly. 3.1 adds two switches — RandomTrailers\nappends a random tail to every outgoing packet, DisableCookies silences\ncookie replies — both off by default, because a server that quietly breaks\nNAT keepalive is worse than one turned on knowingly.",
+        "Поддержка AWG 3.x появилась потому, что у апстрима нет self-hosted 3.x:\nсерверный конвейер работает через awg-quick, а amneziawg-tools до сих пор\nразбирает только ключи 2.0. Сам демон 3.0 и 3.1 понимает — поэтому мы\nнастраиваем его напрямую через UAPI. В 3.1 два переключателя: RandomTrailers\nдописывает случайный хвост каждому исходящему пакету, DisableCookies\nзапрещает cookie-ответы — оба выключены по умолчанию: сервер, который тихо\nломает NAT keepalive, хуже включённого осознанно."
     ),
     MenuGenerate => ("Generate a configuration", "Сгенерировать конфигурацию"),
     MenuDeploy => ("Deploy to a server", "Развернуть на сервере"),

@@ -60,6 +60,7 @@ dependencies = [
  "awg-core",
  "crossterm",
  "ratatui",
+ "serde_json",
 ]
 
 [[package]]

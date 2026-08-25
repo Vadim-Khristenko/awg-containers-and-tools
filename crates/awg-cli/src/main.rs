@@ -156,10 +156,12 @@ fn usage(lang: Lang) {
     println!("  awg-tool about");
     println!("      {}", t(lang, K::CmdAbout));
     println!();
-    println!("  --version 3.0        {}", t(lang, K::OptVersion));
+    println!("  --version 3.1        {}", t(lang, K::OptVersion));
     println!("  --profile quic       {}", t(lang, K::OptProfile));
     println!("  --client amneziavpn  {}", t(lang, K::OptClient));
     println!("  --uapi               {}", t(lang, K::OptUapi));
+    println!("  --json               {}", t(lang, K::OptJson));
+    println!("  --out client.conf    {}", t(lang, K::OptOut));
     println!("  --intensity medium   {}", t(lang, K::OptIntensity));
     println!("  --router             {}", t(lang, K::OptRouter));
     println!("  --mtu 1500           {}", t(lang, K::OptMtu));
@@ -167,6 +169,8 @@ fn usage(lang: Lang) {
     println!("  --browser chrome     {}", t(lang, K::OptBrowser));
     println!("  --mimic-all          {}", t(lang, K::OptMimicAll));
     println!("  --tag-c              {}", t(lang, K::OptTagC));
+    println!("  --random-trailers    {}", t(lang, K::OptRandomTrailers));
+    println!("  --disable-cookies    {}", t(lang, K::OptDisableCookies));
     println!("  --lang en|ru         {}", t(lang, K::OptLang));
     println!();
     println!("{}:", t(lang, K::UsageServerFlags));
@@ -287,8 +291,45 @@ fn cmd_gen(args: &[String], lang: Lang) {
     } else {
         params.conf_lines()
     };
-    for l in lines {
-        println!("{l}");
+
+    /*
+     * --json speaks to scripts: the parameter set as an object, plus the raw
+     * render, so a wrapper can take either the parsed keys or the exact text
+     * without re-parsing. Built from the rendered lines rather than from the
+     * internal types — the render is the contract, and this way the JSON can
+     * never disagree with what the same run would have written to a file.
+     */
+    let body = if has_flag(args, "--json") {
+        let mut obj = serde_json::Map::new();
+        obj.insert("version".into(), serde_json::json!(version.as_str()));
+        obj.insert("profile".into(), serde_json::json!(profile.id()));
+        let mut map = serde_json::Map::new();
+        for l in &lines {
+            if let Some((k, v)) = l.split_once(" = ") {
+                map.insert(k.to_string(), serde_json::json!(v));
+            }
+        }
+        obj.insert("params".into(), serde_json::Value::Object(map));
+        obj.insert(
+            "lines".into(),
+            serde_json::json!(lines.iter().collect::<Vec<_>>()),
+        );
+        serde_json::to_string_pretty(&serde_json::Value::Object(obj))
+            .unwrap_or_else(|_| "{}".into())
+    } else {
+        lines.join("\n")
+    };
+
+    match flag_value(args, "--out") {
+        // Warnings stay on stderr either way, so a pipe and a file carry the
+        // same content and the operator still hears about anything odd.
+        Some(path) => {
+            std::fs::write(&path, body + "\n").unwrap_or_else(|e| {
+                eprintln!("awg-tool: cannot write {path}: {e}");
+                std::process::exit(1);
+            });
+        }
+        None => println!("{body}"),
     }
 
     // Warnings go to stderr so `awg-tool gen > client.conf` stays a valid file.
