@@ -1,99 +1,53 @@
 # Contributing
 
-Thanks for wanting to help. This document covers what you need to know before opening a pull request.
+Thanks for wanting to help. What follows is what a contributor actually needs — the commands, the gotchas this project has already fallen into, and where things live.
 
-**По-русски: [RU.CONTRIBUTING.MD](RU.CONTRIBUTING.MD)**
+## What you need
 
-## Getting set up
+- **Rust stable** — the workspace builds on it alone.
+- **Docker** — only for the live tunnel tests and the images. Everything else (unit tests, clippy, the CLI itself) runs without it.
+- No OpenSSL on your machine, and that is on purpose: `ssh2` vendors its own, and a system OpenSSL is one more thing to disagree about.
+
+## The commands
 
 ```bash
-git clone https://github.com/Vadim-Khristenko/awg-containers-and-tools
-cd awg-containers-and-tools
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-You need Rust 1.90 or newer — the workspace is on edition 2024. For anything touching the containers you also need Docker, and the test scripts need to create tun devices, so they want root.
+Warnings are errors in CI on purpose: more than one bug here started life as a clippy warning nobody acted on. If your change needs an `#[allow]`, the comment above it should say why the lint is wrong rather than inconvenient.
 
-## Before you open a PR
+## The gotchas
 
-```bash
-cargo test --workspace              # all tests pass
-cargo clippy --workspace --all-targets   # zero warnings
-cargo fmt --check
-```
-
-If you changed anything under `containers/`:
+**The exec bit.** A Windows working copy cannot record file modes, and a shell script committed without `100755` works for whoever added it and fails everywhere else. CI checks the index and will send you here:
 
 ```bash
-cd containers
-./build.sh
-sudo ./selftest.sh        # live tunnel per generation
-sudo ./paralleltest.sh    # all four at once
-sudo ./dnstest.sh         # leak protection still holds
+git update-index --chmod=+x containers/your-script.sh
 ```
 
-These are slow, but they are the difference between "it compiles" and "it carries traffic". The container work in this project has repeatedly shipped bugs that only a live tunnel exposes.
+**Live tunnel tests do not run on every push.** They need `/dev/net/tun`, privileged containers and about forty minutes, so they are `workflow_dispatch` plus a weekly schedule. If your change touches the images, the entrypoint or the test scripts, trigger "Live tunnel tests" by hand before calling it done — the unit tests cannot see a handshake.
 
-## Things that will get a PR sent back
+**The status page's stylesheet is generated.** `containers/status-www/architect.css` is extracted from the [Architect repository](https://github.com/Vadim-Khristenko/Any-Tech-ARCHITECT)'s kit so the page renders as the site's sibling. Edit the kit over there, then:
 
-**Protocol invariants are not style preferences.** The generator refuses to emit certain combinations because real daemons reject them, and the reasons are recorded next to the checks. If a validation rule is in your way, find out why it exists before removing it. Some examples of what these rules encode:
-
-- the S-value floor when header protection is enabled
-- the required relation between the rekey and reject timers
-- which junk-packet tags each protocol version actually accepts — 1.5 daemons reject `<rc>` and `<rd>` with `errno=-22`, and `<c>` is unimplemented on 2.0 and 3.0
-- the size ceilings that keep junk packets inside the path MTU
-
-Every one of these was found by a daemon refusing a config, not by reading a spec.
-
-**Do not introduce a shared default parameter set.** Parameters are randomised per install on purpose. A built-in default would give every server deployed with this tool the same DPI fingerprint, and one signature would block all of them. This is the single most important design constraint in the project.
-
-**Do not weaken key generation.** Key material comes from the OS CSPRNG. A seeded or thread-local PRNG anywhere near key generation is a security bug, not an optimisation.
-
-**Do not log secrets.** The event log is meant to be shareable with someone helping you debug. Keys, pre-shared keys and header-protection keys must never reach it.
-
-**Do not retune the terminal palette.** `crates/awg-cli/src/theme.rs` is the Any Tech ARCHITECT palette transcribed for a terminal, and a test pins the key values. The two halves of the release are meant to look like one product; a tidy-up here quietly splits them. If Architect's palette changes, change it here to match and say so in the commit.
-
-## Tests
-
-New behaviour needs a test. The protocol logic in `awg-core` is deliberately written as pure functions over inputs — parameter generation, validation, rendering and platform detection all take data and return data — so almost everything can be tested without a network, a container or a server. If your change is hard to test, that is usually a sign it should be split.
-
-Name tests after the behaviour they protect, not the function they call. `nixos_is_never_given_an_imperative_command` tells the next person what broke; `test_plan_3` does not.
-
-## Commit messages
-
-Conventional commits:
-
-```
-type(scope): summary in the imperative
-
-Why the change was needed, if it is not obvious from the summary.
+```bash
+node containers/status-www/extract-kit.js
 ```
 
-Types in use: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `chore`. Scopes follow the layout — `awg-core`, `awg-cli`, `containers`, `ci`.
+and commit the result. The image build never needs the Architect repo — the generated file is committed.
 
-Write the body for someone reading it in a year with no memory of the discussion.
+**Image rebuilds are fingerprinted.** `containers/inputs-digest.sh` hashes everything that decides what ends up inside an image; the release pipeline compares it against what is published and skips identical images. If you add a file that ends up in an image — a script, a config — add it to the fingerprint list, or a changed image will quietly look unchanged.
 
-## Reporting bugs
+## Where things live
 
-The useful ones include:
+| Path | What it is |
+|---|---|
+| `crates/awg-core` | parameter generation, rendering, the version capability table |
+| `crates/awg-cli` | `awg-tool`: the command surface and the TUI |
+| `containers/` | one Dockerfile per shape, the entrypoints, the live test scripts |
 
-- which protocol version and which client
-- the generated parameters, **with the keys removed**
-- what the daemon said — `awg-uapi get` output and the container log
-- whether it fails at import, at handshake, or after traffic starts
+New protocol vocabulary goes through the same door as everything else: the capability table in `awg-core/src/versions.rs` decides what a version reads, and the renderer, the parser and the tests follow from it. A key the version does not read must not be emitted — a device refuses unknown keys at config parse, and a config that fails elsewhere is not a feature.
 
-Never paste private keys, pre-shared keys or `HeaderProtectionKey` values into an issue. Regenerate them if you already have.
+## Commits
 
-## Scope
-
-This project deliberately does not:
-
-- ship a public server or hosting of any kind
-- bundle a default configuration meant for everyone
-- claim any affiliation with AmneziaVPN
-
-Issues asking for those will be closed with a pointer back here.
-
-## License
-
-Contributions are accepted under the MIT license — see [LICENSE](LICENSE).
+Conventional prefixes (`feat`, `fix`, `docs`, `chore`), a lowercase summary that says what happened, and a body that says why when the why is not obvious. English.

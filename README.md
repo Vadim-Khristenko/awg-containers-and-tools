@@ -49,8 +49,9 @@ Images are published on Docker Hub under [`vaiprog`](https://hub.docker.com/u/va
 | `vaiprog/amnezia-wg-3` | AWG 3.0 | amneziawg-go v3.0.2 |
 | `vaiprog/amnezia-wg-31` | AWG 3.1 | amneziawg-go v3.1.20260814 |
 | `vaiprog/amnezia-wg-dns` | — | unbound |
+| `vaiprog/amnezia-wg-status` | — | the tunnel's own status page |
 
-All five run side by side on one host without stepping on each other.
+All five tunnel generations run side by side on one host without stepping on each other. Every image is published for `amd64` and `arm64` — the latter is what most boards people actually run tunnels on speak.
 
 ---
 
@@ -181,6 +182,28 @@ The resolver sits on its own bridge network at `172.29.172.254`, matching what A
 
 That is a stronger guarantee than "the resolver is preferred". A query that leaks outside the tunnel does not quietly reach your ISP's resolver instead — it reaches nothing at all, and fails visibly.
 
+### Blocking domains
+
+Mount a file of domain names into the resolver and each one — with everything beneath it — stops resolving, answered NXDOMAIN by the resolver itself, with no upstream query ever leaving the container:
+
+```yaml
+    dns:
+      volumes:
+        - ./blocklist.txt:/etc/unbound/blacklist.d/list.txt:ro
+```
+
+One domain per line; `#` comments and blank lines are skipped, and hosts-file style lines (`0.0.0.0 ads.example.com`) work as-is, so an existing hosts file mounts unchanged. Lines that are not domains are dropped with a count rather than taking the resolver down. NXDOMAIN rather than `0.0.0.0` on purpose: a sinkholed address invites the client to retry, a name that does not exist is simply done.
+
+### The page that answers "am I under the VPN?"
+
+The compose file stands up a small status page at `http://amiunder.vpn`, and it works by construction: `.vpn` is not a real top-level domain and never will be, so the only resolver on earth that answers the name is the tunnel's own, and the address is reachable only through the tunnel. If the page opens, you are under the VPN; if it does not, you are not — there is no third answer to render.
+
+It speaks Russian and English, shows the address the tunnel sees for you, and measures throughput by streaming a payload from the same host — no third-party speed test, no request that could reveal your real address. The stylesheet is the Architect kit itself, served locally like everything else on the page. It runs with no capabilities and a read-only filesystem, and it is there by default; to leave it out of a particular up:
+
+```bash
+docker compose up -d --scale status=0
+```
+
 ---
 
 ## Server management
@@ -197,6 +220,17 @@ awg-uapi get                     # raw daemon state
 A new peer's private key is generated inside the container, printed once and never written to disk. What is stored is the label, public key, address and pre-shared key — the last one because the server needs it again after every restart.
 
 The node also keeps an event log at `/var/log/awg/events.log`, mirrored to `docker logs`: when the node came up, when the interface was configured, who was given access and when it was taken away. It contains no private keys, pre-shared keys or config bodies — a public key identifies a peer perfectly well. It is still sensitive, though, because it *is* the list of who has access, so treat it accordingly rather than pasting it into an issue. It is bounded at 256 KiB plus one rotation, so a node that flaps for a year still costs half a megabyte.
+
+### When it does not work
+
+Two tools live inside every node image for exactly that moment:
+
+```bash
+awg-health                       # exit 0 and a green docker ps status when the node can carry traffic
+awg-dump > dump.txt              # the whole picture, made for pasting
+```
+
+The health check is deliberately narrow: interface up, UAPI answering. A node with no peers yet is healthy — an orchestrator restarting it into the same silence fixes nothing. The dump gathers what an operator needs side by side — interface, routes and rules, the UAPI view, NAT rules, the event log tail — and carries no private keys or pre-shared keys by construction, because its whole purpose is to leave the node.
 
 ---
 
