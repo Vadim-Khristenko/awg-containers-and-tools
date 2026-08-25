@@ -55,7 +55,7 @@ trap cleanup EXIT
 cleanup
 WORK=$(mktemp -d)
 
-hr "bringing up four generations at once"
+hr "bringing up five generations at once"
 for v in "${VERSIONS[@]}"; do
     i=${IFACE[$v]}; t=${TUN[$v]}; x=${XNET[$v]}; p=${PORT[$v]}; img=${IMG[$v]}
     "$AWG_TOOL" gen --version "$v" > "$WORK/params-$v.conf" || exit 1
@@ -121,18 +121,18 @@ running=$(docker ps --filter name=awgpar- --filter status=running -q | wc -l)
 echo "  running: $running/8"
 [ "$running" = 8 ]; check $? "eight containers up simultaneously"
 
-hr "the host really is listening on four distinct ports"
+hr "the host really is listening on five distinct ports"
 ss -lnup 2>/dev/null | grep -E ':(5182[1-4])\b' || docker ps --filter name=awgpar- --format '{{.Ports}}'
 n=$(docker ps --filter name=awgpar- --format '{{.Ports}}' | grep -oE '5182[1-4]->' | sort -u | wc -l)
 echo "  distinct published UDP ports: $n"
-[ "$n" = 4 ]; check $? "four distinct listen ports"
+[ "$n" = 5 ]; check $? "five distinct listen ports"
 
 hr "distinct interface names and tunnel subnets"
 for v in "${VERSIONS[@]}"; do
     echo "  AWG $v server: $(docker exec "$(srv "$v")" ip -o -4 addr show dev "${IFACE[$v]}" | awk '{print $2, $4}')"
 done
 u=$(for v in "${VERSIONS[@]}"; do docker exec "$(srv "$v")" ip -o -4 addr show dev "${IFACE[$v]}" | awk '{print $2 $4}'; done | sort -u | wc -l)
-[ "$u" = 4 ]; check $? "four distinct interface/address pairs"
+[ "$u" = 5 ]; check $? "five distinct interface/address pairs"
 
 hr "each server's NAT rules name only its own interface"
 for v in "${VERSIONS[@]}"; do
@@ -151,12 +151,12 @@ for v in "${VERSIONS[@]}"; do
     [ -n "$hs" ] && [ "$hs" != "last_handshake_time_sec=0" ]; check $? "AWG $v handshake"
 done
 
-hr "traffic on all four at once"
+hr "traffic on all five at once"
 for v in "${VERSIONS[@]}"; do
     docker exec "$(srv "$v")" sh -c "nohup socat -u TCP-LISTEN:9000,reuseaddr,bind=${TUN[$v]}.0.1 CREATE:/tmp/recv.bin >/dev/null 2>&1 &"
 done
 sleep 2
-# Started together, not one after another: the point is four tunnels moving data
+# Started together, not one after another: the point is five tunnels moving data
 # in the same seconds, on one host, through one kernel's tun driver.
 for v in "${VERSIONS[@]}"; do
     ( docker exec "$(cli "$v")" sh -c \
@@ -176,7 +176,7 @@ for v in "${VERSIONS[@]}"; do
     check $? "AWG $v ICMP client -> server"
 done
 
-hr "and all four are still up afterwards"
+hr "and all five are still up afterwards"
 for v in "${VERSIONS[@]}"; do
     echo "  AWG $v: $(docker exec "$(srv "$v")" awg-uapi get "${IFACE[$v]}" 2>/dev/null | grep -E '^(tx_bytes|rx_bytes)=' | tr '\n' ' ')"
 done

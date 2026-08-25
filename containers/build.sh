@@ -40,7 +40,7 @@ BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 inputs_digest() { ./inputs-digest.sh "$1" "${GO_TAG[$1]:--}"; }
 
 targets=("$@")
-if [ "${#targets[@]}" -eq 0 ]; then targets=(1.0 1.5 2.0 3.0 dns); fi
+if [ "${#targets[@]}" -eq 0 ]; then targets=(1.0 1.5 2.0 3.0 3.1 dns); fi
 
 for v in "${targets[@]}"; do
     name="${REGISTRY}${IMAGE[$v]:-}:latest"
@@ -53,7 +53,7 @@ for v in "${targets[@]}"; do
         continue
     fi
     tag=${GO_TAG[$v]:-}
-    [ -n "$tag" ] || { echo "unknown target: $v (want 1.0 1.5 2.0 3.0 dns)" >&2; exit 1; }
+    [ -n "$tag" ] || { echo "unknown target: $v (want 1.0 1.5 2.0 3.0 3.1 dns)" >&2; exit 1; }
     echo "==> $name  (amneziawg-go $tag)"
     docker build \
         --build-arg "AWG_GO_VERSION=$tag" \
