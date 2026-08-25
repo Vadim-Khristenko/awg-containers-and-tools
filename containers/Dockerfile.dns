@@ -34,16 +34,34 @@ LABEL org.opencontainers.image.title="amnezia-wg-dns — tunnel-only resolver (u
 
 # unbound only. No dig, no bind-tools, no shell utilities beyond busybox: this
 # image exists to answer port 53 and nothing else, and every extra package is
-# another thing to patch on a host that is meant to be forgettable.
-RUN apk add --no-cache unbound \
+# another thing to patch on a host that is meant to be forgettable. libcap is
+# the one deliberate extra: it lets the container run as an unprivileged user
+# and still bind port 53, via a file capability on the binary rather than a
+# root process.
+RUN apk add --no-cache unbound libcap \
  && rm -rf /var/cache/apk/* /usr/share/man \
- && mkdir -p /var/log/unbound \
- && chown unbound:unbound /var/log/unbound
+ && mkdir -p /var/log/unbound /etc/unbound/blacklist.d \
+ && chown unbound:unbound /var/log/unbound \
+ && setcap cap_net_bind_service=+ep /usr/sbin/unbound
 
 COPY unbound.conf /etc/unbound/unbound.conf
+COPY entrypoint-dns.sh /usr/local/bin/entrypoint-dns.sh
+RUN chmod +x /usr/local/bin/entrypoint-dns.sh
+
+# The tunnel containers stay root by necessity — building an interface and
+# writing NAT rules need CAP_NET_ADMIN for as long as the node lives. This one
+# has no such excuse: unbound drops to its own user anyway, and running the
+# whole container as that user from the start means the resolver is one less
+# thing on the host that can touch anything outside its own files.
+USER unbound
 
 EXPOSE 53/udp 53/tcp
+# The health check asks the resolver for a name answered from its own config —
+# no upstream involved. A resolver that is up while the uplink is down is
+# healthy, and restarting it would not bring the internet back.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD nslookup health.awg.internal 127.0.0.1 >/dev/null 2>&1 || exit 1
 # -d keeps it in the foreground so docker sees the real process; -p means "do
 # not fork a pidfile writer", which an unprivileged read-only container cannot
 # write anyway.
-ENTRYPOINT ["/usr/sbin/unbound", "-d", "-p", "-c", "/etc/unbound/unbound.conf"]
+ENTRYPOINT ["/usr/local/bin/entrypoint-dns.sh"]

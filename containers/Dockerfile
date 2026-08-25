@@ -75,16 +75,28 @@ LABEL org.opencontainers.image.title="AmneziaWG ${AWG_VERSION} node (unofficial)
       space.vai-rice.awg.go-version="${AWG_GO_VERSION}" \
       space.vai-rice.awg.tools-version="${AWG_TOOLS_VERSION}" \
       space.vai-rice.awg.inputs="${INPUTS_DIGEST}"
-RUN apk add --no-cache bash iptables ip6tables iproute2 conntrack-tools socat dumb-init
+# tcpdump and curl are the debugging pair: the first answers "do the packets
+# leave, and as what", the second answers "can this node reach the thing it
+# needs". They cost a couple of megabytes and save a round trip of "install a
+# shell into the image" exactly when the node is at its worst.
+RUN apk add --no-cache bash iptables ip6tables iproute2 conntrack-tools socat dumb-init tcpdump curl
 COPY --from=build /out-awg-go /usr/bin/amneziawg-go
 COPY --from=tools /out-awg    /usr/bin/awg
 COPY entrypoint.sh /usr/bin/entrypoint.sh
 COPY awg-uapi      /usr/bin/awg-uapi
 COPY awg-peer      /usr/bin/awg-peer
 COPY awg-log.sh    /usr/lib/awg/log.sh
-RUN chmod +x /usr/bin/entrypoint.sh /usr/bin/awg-uapi /usr/bin/awg-peer
+COPY awg-health    /usr/bin/awg-health
+COPY awg-dump.sh   /usr/bin/awg-dump
+RUN chmod +x /usr/bin/entrypoint.sh /usr/bin/awg-uapi /usr/bin/awg-peer /usr/bin/awg-health /usr/bin/awg-dump
 ENV AWG_IFACE=awg0
 # So the event log can say which generation is running without the operator
 # having to map an image name back to a protocol.
 ENV AWG_PROTOCOL=${AWG_VERSION}
+# The check itself is awg-health: interface up, UAPI answering. It cannot see
+# handshakes — a node with no peers yet is healthy — and it is not meant to:
+# orchestrators restart on unhealthy, and restarting a good node into the same
+# silence fixes nothing.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["/usr/bin/awg-health"]
 ENTRYPOINT ["dumb-init", "--", "/usr/bin/entrypoint.sh"]

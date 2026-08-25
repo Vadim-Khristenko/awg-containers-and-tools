@@ -1,0 +1,35 @@
+#!/bin/sh
+# The container health check.
+#
+# Two facts, both cheap, both about the thing an operator actually cares
+# about — "will traffic through this node work":
+#
+#   1. the interface exists and is up;
+#   2. the daemon answers on its UAPI socket.
+#
+# Everything else is decoration. The entrypoint already dies with the daemon,
+# so a dead tunnel usually means a dead container; what this check adds is the
+# case where the process is alive but the node is not — a hung daemon, a socket
+# that stopped answering, an interface someone removed by hand. Orchestrators
+# see `unhealthy` in `docker ps` instead of a green container swallowing
+# traffic into a void.
+#
+# Deliberately NOT checked: handshakes and transfer counters. A server with no
+# peers yet, or a client whose server is down, is healthy in every way this
+# check can honestly speak to — failing it there would make every orchestrator
+# restart a perfectly good node into the same silence.
+set -eu
+
+IFACE="${AWG_IFACE:-awg0}"
+
+ip link show dev "$IFACE" >/dev/null 2>&1 || {
+    echo "unhealthy: interface $IFACE does not exist" >&2
+    exit 1
+}
+
+out=$(awg-uapi get "$IFACE" 2>&1 | head -1)
+case "$out" in
+    errno=0*) exit 0 ;;
+    "")       echo "unhealthy: UAPI answered nothing" >&2; exit 1 ;;
+    *)        echo "unhealthy: UAPI said $out" >&2; exit 1 ;;
+esac

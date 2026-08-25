@@ -130,6 +130,25 @@ echo "recv   sha256: $b"
 [ -n "$a" ] && [ "$a" = "$b" ]; check $? "4 MiB TCP transfer intact"
 docker exec "$SRV" awg-uapi get 2>&1 | grep -E '^(tx_bytes|rx_bytes)='
 
+# The health check and the diagnostic bundle run on a live node, because that
+# is where they will be used. The dump gets its own secret check: it is made
+# for pasting, so the one way it must never fail is by carrying a key.
+hr "PROOF 4 — health check and the diagnostic bundle"
+docker exec "$SRV" awg-health >/dev/null 2>&1; check $? "awg-health: server reports healthy"
+docker exec "$CLI" awg-health >/dev/null 2>&1; check $? "awg-health: client reports healthy"
+dump=$(docker exec "$SRV" awg-dump 2>&1)
+echo "$dump" | sed -n '1,8p'
+echo "$dump" | grep -q "===== interface"; check $? "awg-dump produced its sections"
+if printf '%s' "$dump" | grep -qF -- "$srv_priv"; then rc=1; else rc=0; fi
+check $rc "awg-dump carries no private key"
+if printf '%s' "$dump" | grep -qF -- "$psk"; then rc=1; else rc=0; fi
+check $rc "awg-dump carries no preshared key"
+# By now more than one 30s health interval has passed since start; the
+# orchestrator-visible status should agree with what awg-health just said.
+status=$(docker inspect -f '{{.State.Health.Status}}' "$SRV" 2>/dev/null || echo unknown)
+echo "docker health status: $status"
+[ "$status" = "healthy" ]; check $? "docker reports the server container healthy"
+
 hr "RESULT"
 if [ "$FAIL" = 0 ]; then echo "AWG $V: all checks passed"; else echo "AWG $V: FAILURES above"; fi
 exit "$FAIL"

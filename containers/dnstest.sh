@@ -99,7 +99,17 @@ chmod 644 "$WORK"/*.conf; chmod 755 "$WORK"
 docker network create --subnet 172.31.98.0/24 "$NET"    >/dev/null || exit 1
 docker network create --subnet 172.29.172.0/24 "$DNSNET" >/dev/null || exit 1
 
-docker run -d --name "$DNS" --network "$DNSNET" --ip "$RESOLVER" "$DNSIMG" >/dev/null || exit 1
+# The blacklist under test. example.net goes in as a bare domain, the second
+# line in hosts-file style to prove that form is accepted too; example.com and
+# example.org stay out of it, so the leak directions above keep their meaning.
+cat > "$WORK/blocklist.txt" <<EOF
+# dnstest blocklist — the resolver must sinkhole these
+example.net
+0.0.0.0 also-blocked.example
+EOF
+
+docker run -d --name "$DNS" --network "$DNSNET" --ip "$RESOLVER" \
+    -v "$WORK/blocklist.txt:/etc/unbound/blacklist.d/test.txt:ro" "$DNSIMG" >/dev/null || exit 1
 docker run -d --name "$SRV" --network "$NET" --ip 172.31.98.10 \
     --cap-add NET_ADMIN --device /dev/net/tun --sysctl net.ipv4.ip_forward=1 \
     -v "$WORK/server.conf:/etc/amnezia/awg/awg0.conf:ro" "$IMG" >/dev/null || exit 1
@@ -155,6 +165,21 @@ hr "DIRECTION 2b — and it is not that the bystander has no network at all"
 docker exec "$BY1" timeout 5 ping -c 2 172.31.98.10 2>&1 | tail -2
 docker exec "$BY1" timeout 5 ping -c 2 172.31.98.10 >/dev/null 2>&1
 check $? "the same bystander can still reach the server's transport address"
+
+# The blacklist is answered by the resolver itself, so it is tested from the
+# one vantage point that matters — the tunnel client. example.net is on the
+# list, example.org deliberately is not: if both failed, the test would not
+# know whether the blacklist ate the query or the resolver had died.
+hr "DIRECTION 4 — the blacklist sinks its names, and only its names"
+out_blk=$(docker exec "$CLI" timeout 8 nslookup example.net "$RESOLVER" 2>&1); rc_blk=$?
+echo "$out_blk"
+echo "exit status: $rc_blk"
+[ "$rc_blk" != 0 ]; check $? "blacklisted example.net did not resolve"
+out_sub=$(docker exec "$CLI" timeout 8 nslookup deep.sub.example.net "$RESOLVER" 2>&1); rc_sub=$?
+[ "$rc_sub" != 0 ]; check $? "a name below a blacklisted zone did not resolve either"
+out_ctl=$(docker exec "$CLI" timeout 8 nslookup example.org "$RESOLVER" 2>&1); rc_ctl=$?
+echo "$out_ctl" | tail -3
+[ "$rc_ctl" = 0 ]; check $? "non-blacklisted example.org still resolves"
 
 hr "RESULT"
 if [ "$FAIL" = 0 ]; then
