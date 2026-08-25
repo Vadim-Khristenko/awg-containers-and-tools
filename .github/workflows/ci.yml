@@ -116,3 +116,42 @@ jobs:
           push: false
           cache-from: type=gha,scope=dns
           cache-to: type=gha,mode=max,scope=dns
+
+  status-image:
+    name: Build amnezia-wg-status
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: containers
+          file: containers/Dockerfile.status
+          push: false
+          cache-from: type=gha,scope=status
+          cache-to: type=gha,mode=max,scope=status
+
+  # The release publishes every image for amd64 and arm64, but building all
+  # five under emulation on every push would triple the image job for little:
+  # the Go source compiles the same either way. One image, one foreign
+  # platform, no push — enough to catch the two ways an arch actually breaks
+  # (a base image without the architecture, a package that does) before a
+  # release runs into them.
+  arm64-canary:
+    name: arm64 canary (amnezia-wg-31)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: containers
+          file: containers/Dockerfile
+          push: false
+          platforms: linux/arm64
+          build-args: |
+            AWG_VERSION=3.1
+            AWG_GO_VERSION=v3.1.20260814
+          cache-from: type=gha,scope=arm64-canary
+          cache-to: type=gha,mode=max,scope=arm64-canary

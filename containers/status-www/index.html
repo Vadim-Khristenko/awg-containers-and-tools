@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>amiunder.vpn — вы под VPN?</title>
+<link rel="stylesheet" href="architect.css">
+<!--
+  Served from inside the tunnel only. The name resolves through the tunnel's
+  own resolver and the address is reachable only through the tunnel, so the
+  page loading at all IS the answer. Everything on it is computed locally or
+  fetched from this same host: no external requests, no third-party speed
+  test, no analytics, no font CDNs — a page whose whole point is privacy does
+  not leak to render itself.
+-->
+<!--
+  The theme comes from architect.css — the kit itself, not an approximation.
+  What is left here is only this page's layout: one card, centred, and the
+  few arrangements the kit has no opinion about.
+-->
+<style>
+    body {
+        min-height: 100dvh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--sp-5);
+        font-family: var(--fw);
+    }
+    .status-card {
+        width: 100%;
+        max-width: 520px;
+        padding: var(--sp-6) var(--sp-5);
+        text-align: center;
+    }
+    .status-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: var(--sp-5);
+    }
+    .status-brand {
+        font-size: 0.72rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+    }
+    .status-brand b { color: var(--accent-ink); }
+    .lang { display: flex; gap: var(--sp-1); }
+    .lang button {
+        border: var(--rule) solid var(--line);
+        background: transparent;
+        color: var(--ink-3);
+        font: inherit;
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 4px 10px;
+        border-radius: var(--r-pill);
+        cursor: pointer;
+    }
+    .lang button.on {
+        border-color: var(--accent);
+        color: var(--accent-ink);
+        background: rgb(var(--accent-rgb) / 0.12);
+    }
+    .verdict {
+        font-size: 2.6rem;
+        font-weight: 800;
+        line-height: 1.1;
+        margin-bottom: var(--sp-2);
+        color: var(--counter);
+    }
+    .verdict-sub {
+        color: var(--ink-3);
+        font-size: var(--t-sm);
+        margin-bottom: var(--sp-6);
+    }
+    .rows {
+        display: grid;
+        gap: var(--sp-2);
+        text-align: left;
+        margin-bottom: var(--sp-5);
+    }
+    .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: var(--sp-3);
+        background: var(--ground-3);
+        border: var(--rule) solid var(--line-soft);
+        border-radius: var(--r-2);
+        padding: var(--sp-2) var(--sp-3);
+        font-size: var(--t-sm);
+    }
+    .row .k { color: var(--ink-3); }
+    .row .v { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .row .v.pending { color: var(--ink-3); font-weight: 400; }
+    .speed-btn { width: 100%; height: 44px; }
+    .meter {
+        height: 6px;
+        background: var(--ground-3);
+        border-radius: var(--r-pill);
+        margin-top: var(--sp-3);
+        overflow: hidden;
+        display: none;
+    }
+    .meter i {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: var(--accent);
+        border-radius: var(--r-pill);
+        transition: width 0.2s;
+    }
+    .status-foot {
+        margin-top: var(--sp-5);
+        font-size: 0.72rem;
+        color: var(--ink-3);
+        line-height: 1.5;
+    }
+</style>
+</head>
+<body>
+<div class="card status-card">
+    <div class="status-top">
+        <div class="status-brand">Any Tech <b>ARCHITECT</b> · amiunder.vpn</div>
+        <div class="lang">
+            <button id="lang-ru" type="button">RU</button>
+            <button id="lang-en" type="button">EN</button>
+        </div>
+    </div>
+    <div class="verdict" id="verdict">—</div>
+    <div class="verdict-sub" id="verdict-sub"></div>
+    <div class="rows">
+        <div class="row">
+            <span class="k" id="k-ip"></span>
+            <span class="v pending" id="tunnel-ip">…</span>
+        </div>
+        <div class="row">
+            <span class="k" id="k-name"></span>
+            <span class="v">amiunder.vpn</span>
+        </div>
+        <div class="row">
+            <span class="k" id="k-speed"></span>
+            <span class="v pending" id="speed"></span>
+        </div>
+    </div>
+    <button class="btn btn--primary speed-btn" id="go" type="button"></button>
+    <div class="meter" id="meter"><i id="meter-fill"></i></div>
+    <div class="status-foot" id="foot"></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

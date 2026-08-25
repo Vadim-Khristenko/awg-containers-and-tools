@@ -29,6 +29,7 @@ IMAGES=(
     "amnezia-wg-2:2.0:v0.2.19"
     "amnezia-wg-3:3.0:v3.0.2"
     "amnezia-wg-31:3.1:v3.1.20260814"
+    "amnezia-wg-status:-:-"
 )
 
 need() { command -v "$1" >/dev/null || { echo "missing: $1" >&2; exit 1; }; }

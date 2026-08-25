@@ -22,9 +22,11 @@ target="${1:?usage: inputs-digest.sh <target> <go-tag>}"
 gotag="${2:--}"
 
 if [ "$target" = dns ]; then
-    files="Dockerfile.dns unbound.conf"
+    files="Dockerfile.dns unbound.conf entrypoint-dns.sh"
+elif [ "$target" = status ]; then
+    files="Dockerfile.status status-www/index.html status-www/architect.css status-www/app.js status-www/whoami.sh status-www/httpd.conf"
 else
-    files="Dockerfile entrypoint.sh awg-uapi awg-peer awg-log.sh"
+    files="Dockerfile entrypoint.sh awg-uapi awg-peer awg-log.sh awg-health awg-dump.sh"
 fi
 
 # The build args are part of the fingerprint too: the same Dockerfile with a

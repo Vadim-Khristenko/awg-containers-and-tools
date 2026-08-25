@@ -71,6 +71,29 @@ services:
       awg:
         ipv4_address: 172.31.99.11
 
+  # The "am I under the VPN?" page at http://amiunder.vpn — the name resolves
+  # only through the tunnel resolver (a local-data record in unbound.conf) and
+  # the address answers only on this bridge, so the page opening at all is the
+  # answer. Runs by default; to leave it out of a particular up:
+  #
+  #   docker compose up -d --scale status=0
+  #
+  # It serves one static page and one CGI echo, needs no capabilities, writes
+  # nothing, and publishes no port — reachability is decided by the network it
+  # sits on, exactly like the resolver next to it.
+  status:
+    image: vaiprog/amnezia-wg-status:latest
+    container_name: awg-status
+    restart: unless-stopped
+    depends_on: [dns]
+    cap_drop: [ALL]
+    read_only: true
+    networks:
+      dns:
+        # Fixed on purpose: unbound.conf answers amiunder.vpn with this exact
+        # address, so the two must agree.
+        ipv4_address: 172.29.172.253
+
 networks:
   awg:
     ipam:

@@ -99,6 +99,7 @@ jobs:
           - { image: amnezia-wg-3,   awg: "3.0", go: v3.0.2,  file: Dockerfile }
           - { image: amnezia-wg-31,  awg: "3.1", go: v3.1.20260814, file: Dockerfile }
           - { image: amnezia-wg-dns, awg: "dns", go: "-",     file: Dockerfile.dns }
+          - { image: amnezia-wg-status, awg: "status", go: "-", file: Dockerfile.status }
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4

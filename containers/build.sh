@@ -26,6 +26,7 @@ declare -A IMAGE=(
     [3.0]=amnezia-wg-3
     [3.1]=amnezia-wg-31
     [dns]=amnezia-wg-dns
+    [status]=amnezia-wg-status
 )
 
 REGISTRY="${AWG_IMAGE_PREFIX:-vaiprog/}"
@@ -40,7 +41,7 @@ BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 inputs_digest() { ./inputs-digest.sh "$1" "${GO_TAG[$1]:--}"; }
 
 targets=("$@")
-if [ "${#targets[@]}" -eq 0 ]; then targets=(1.0 1.5 2.0 3.0 3.1 dns); fi
+if [ "${#targets[@]}" -eq 0 ]; then targets=(1.0 1.5 2.0 3.0 3.1 dns status); fi
 
 for v in "${targets[@]}"; do
     name="${REGISTRY}${IMAGE[$v]:-}:latest"
@@ -52,8 +53,16 @@ for v in "${targets[@]}"; do
             -t "$name" .
         continue
     fi
+    if [ "$v" = status ]; then
+        echo "==> $name  (the tunnel's own status page)"
+        docker build -f Dockerfile.status \
+            --build-arg "BUILD_DATE=$BUILD_DATE" \
+            --build-arg "INPUTS_DIGEST=$(inputs_digest status)" \
+            -t "$name" .
+        continue
+    fi
     tag=${GO_TAG[$v]:-}
-    [ -n "$tag" ] || { echo "unknown target: $v (want 1.0 1.5 2.0 3.0 3.1 dns)" >&2; exit 1; }
+    [ -n "$tag" ] || { echo "unknown target: $v (want 1.0 1.5 2.0 3.0 3.1 dns status)" >&2; exit 1; }
     echo "==> $name  (amneziawg-go $tag)"
     docker build \
         --build-arg "AWG_GO_VERSION=$tag" \

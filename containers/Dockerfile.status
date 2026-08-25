@@ -1,0 +1,47 @@
+# The "am I under the VPN?" page — amiunder.vpn.
+#
+# The name exists only in the tunnel resolver (a local-data record in
+# unbound.conf), and the address answers only on the resolver network, which
+# is reachable only through the tunnel. Opening the page at all is the whole
+# test: no JavaScript oracle, no external "what is my IP" service that would
+# see the visitor's real address — the one thing this page must never leak.
+#
+# busybox httpd serves the static files and the CGI that echoes the visitor's
+# tunnel address. The speed-test payload is generated at build time: random
+# bytes, incompressible, so the measured number is the tunnel's throughput
+# and not gzip's.
+FROM alpine:3.24
+ARG BUILD_DATE=1970-01-01T00:00:00Z
+ARG INPUTS_DIGEST=
+LABEL org.opencontainers.image.title="amnezia-wg-status — the tunnel's own status page (unofficial)" \
+      org.opencontainers.image.description="amiunder.vpn — a page that answers whether you are under the VPN, with a tunnel speed test. Reachable only from inside the tunnel. UNOFFICIAL community build." \
+      org.opencontainers.image.authors="Vadim Khristenko (VAI_PROG)" \
+      org.opencontainers.image.vendor="Vadim Khristenko (VAI_PROG)" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/Vadim-Khristenko/awg-containers-and-tools" \
+      org.opencontainers.image.url="https://github.com/Vadim-Khristenko/awg-containers-and-tools" \
+      org.opencontainers.image.documentation="https://architect.vai-rice.space" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.base.name="docker.io/library/alpine:3.24" \
+      space.vai-rice.awg.inputs="${INPUTS_DIGEST}"
+
+# busybox httpd lives in busybox-extras on Alpine — the base image's busybox
+# is built without it. The payload is the only generated content: random
+# bytes, incompressible, so the measured number is the tunnel's throughput
+# and not gzip's.
+RUN apk add --no-cache busybox-extras \
+ && mkdir -p /var/www/cgi-bin \
+ && dd if=/dev/urandom of=/var/www/speedtest.bin bs=1M count=8 2>/dev/null \
+ && chmod 644 /var/www/speedtest.bin
+
+COPY status-www/index.html   /var/www/index.html
+COPY status-www/architect.css /var/www/architect.css
+COPY status-www/app.js       /var/www/app.js
+COPY status-www/whoami.sh    /var/www/cgi-bin/whoami
+COPY status-www/httpd.conf   /etc/httpd.conf
+RUN chmod +x /var/www/cgi-bin/whoami
+
+EXPOSE 80
+# -f foreground, -p "do not fork a pidfile writer", -h the web root, -c the
+# config that turns CGI on for /cgi-bin/.
+CMD ["httpd", "-f", "-p", "80", "-h", "/var/www", "-c", "/etc/httpd.conf"]
