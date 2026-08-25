@@ -115,15 +115,15 @@ for v in "${VERSIONS[@]}"; do
 done
 sleep 10
 
-hr "all eight containers are running at the same time"
+hr "all ten containers are running at the same time"
 docker ps --filter name=awgpar- --format '  {{.Names}}  {{.Image}}  {{.Status}}  {{.Ports}}'
 running=$(docker ps --filter name=awgpar- --filter status=running -q | wc -l)
 echo "  running: $running/8"
-[ "$running" = 8 ]; check $? "eight containers up simultaneously"
+[ "$running" = 10 ]; check $? "ten containers up simultaneously"
 
 hr "the host really is listening on five distinct ports"
-ss -lnup 2>/dev/null | grep -E ':(5182[1-4])\b' || docker ps --filter name=awgpar- --format '{{.Ports}}'
-n=$(docker ps --filter name=awgpar- --format '{{.Ports}}' | grep -oE '5182[1-4]->' | sort -u | wc -l)
+ss -lnup 2>/dev/null | grep -E ':(5182[1-5])\b' || docker ps --filter name=awgpar- --format '{{.Ports}}'
+n=$(docker ps --filter name=awgpar- --format '{{.Ports}}' | grep -oE '5182[1-5]->' | sort -u | wc -l)
 echo "  distinct published UDP ports: $n"
 [ "$n" = 5 ]; check $? "five distinct listen ports"
 
@@ -139,7 +139,7 @@ for v in "${VERSIONS[@]}"; do
     echo "  AWG $v: $(docker exec "$(srv "$v")" iptables -t nat -S POSTROUTING | grep MASQUERADE)"
 done
 
-hr "every tunnel handshakes while the other three are up"
+hr "every tunnel handshakes while the other four are up"
 for v in "${VERSIONS[@]}"; do
     hs=""
     for _ in $(seq 1 15); do
@@ -182,7 +182,7 @@ for v in "${VERSIONS[@]}"; do
 done
 still=$(docker ps --filter name=awgpar- --filter status=running -q | wc -l)
 echo "  running: $still/8"
-[ "$still" = 8 ]; check $? "nothing died while the others worked"
+[ "$still" = 10 ]; check $? "nothing died while the others worked"
 
 hr "RESULT"
 if [ "$FAIL" = 0 ]; then
