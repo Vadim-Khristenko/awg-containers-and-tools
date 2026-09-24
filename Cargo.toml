@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/awg-core", "crates/awg-cli"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.90"   # edition 2024 needs 1.85; 1.90 is the floor we actually test against
 license = "MIT"
@@ -18,7 +18,11 @@ flate2 = "1.1"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 # vendored-openssl builds OpenSSL from source: the containers this ships in have
-# no libssh2 and no system OpenSSL headers to link against.
+# no libssh2 and no system OpenSSL headers to link against. On Windows the
+# build needs a native Perl (Strawberry) first on PATH — the MSYS2/Cygwin perl
+# mangles backslash paths and `openssl-src` refuses it — plus the MSVC
+# compiler on PATH (`vcvars64.bat`). CI builds Linux, where none of this
+# applies; so do the images.
 ssh2 = { version = "0.9.6", features = ["vendored-openssl"] }
 
 [profile.release]
