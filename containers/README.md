@@ -1,47 +1,40 @@
-# AmneziaWG containers — 1.0, 1.5, 2.0, 3.0
+# AmneziaWG containers — 1.0, 1.5, 2.0, 3.0, 3.1
 
-Self-hosted AmneziaWG server/client images, plus a tunnel-only resolver.
-Unofficial: a community build by Vadim Khristenko (VAI_PROG), not affiliated
-with, endorsed by or supported by AmneziaVPN. Problems with these images belong
-in [this project's tracker](https://github.com/Vadim-Khristenko/awg-containers-and-tools),
+Self-hosted AmneziaWG server/client images, a tunnel-only resolver and the
+tunnel's own status page. Unofficial: a community build by Vadim Khristenko
+(VAI_PROG), not affiliated with, endorsed by or supported by AmneziaVPN.
+Problems with these images belong in [this project's tracker](https://github.com/Vadim-Khristenko/awg-containers-and-tools),
 not in theirs.
 
 | file | what it does |
 |---|---|
-| `Dockerfile` / `build.sh` | the four protocol images, one build arg apart |
+| `Dockerfile` / `build.sh` | the five protocol images, one build arg apart |
 | `Dockerfile.dns` / `unbound.conf` | the resolver, `vaiprog/amnezia-wg-dns` |
 | `entrypoint.sh` | `.conf` → UAPI, addresses, routes, NAT, event log |
 | `awg-peer` | add / list / revoke peers, issue client configs |
 | `awg-uapi` | raw `get=1` / arbitrary requests against the socket |
 | `awg-log.sh` | the event log, shared by the two above |
+| `awg-health` | health check: interface up, UAPI answering |
+| `awg-dump.sh` | the diagnostic bundle, made for pasting |
+| `awg-under` | "am I under the VPN?" from inside the node |
+| `awg-leak` | resolver and routing leak check from inside the node |
 | `selftest.sh` | one generation end to end: `errno=0`, handshake, traffic |
+| `utiltest.sh` | the in-image checks on their own: health, under, leak |
 | `dnstest.sh` | the DNS anti-leak claim, in both directions |
-| `paralleltest.sh` | all four generations at once on one host |
-| `docker-compose.yml` | a 3.0 pair plus the resolver |
+| `paralleltest.sh` | all five generations at once on one host |
+| `docker-compose.yml` | a 3.0 pair plus the resolver and the status page |
 
 ## Why these exist
 
-Upstream ships no self-hosted AmneziaWG 3.0. Their server pipeline drives
-`awg-quick`, and `amneziawg-tools` — on released tags *and* on master — parses
-only the AWG 2.0 keys. Feeding it a 3.0 config fails at the first new line:
+The entrypoint translates the `.conf` into a UAPI `set=1` request and writes it to the daemon's socket. One request format covers every generation — 1.0 through 3.1 — and it does not depend on what the `amneziawg-tools` in the image happen to parse in a given release: `amneziawg-tools` knew only the 2.0 keys for a long time, and the 3.x keys arrived in it much later than the daemon:
 
 ```
-$ awg setconf awg0 server.conf
-Line unrecognized: `HeaderProtectionKey=tuLp212e3bgF3N95SURzUJuJO1CzrZJeO54ZATG0cQo='
-Configuration parsing error
-$ # remove that line and it just moves on to the next one
-Line unrecognized: `ContentPaddingAddition=22-86'
+$ awg setconf awg0 server.conf       # with older tools
+Line unrecognized: `HeaderProtectionKey=...'
 Configuration parsing error
 ```
 
-`amneziawg-go` itself understands all of it. So the entrypoint skips the tools
-entirely: it translates the `.conf` into a UAPI `set=1` request and writes it to
-the daemon's socket. The daemon is the only component that has to know about
-3.0, and the same code path serves every older generation, because only the keys
-actually present in the config are ever emitted.
-
-`awg` is still shipped in the image, but only for key material
-(`genkey`/`pubkey`/`genpsk`), which no AWG generation changed.
+`awg` is still shipped in the image for key material (`genkey`/`pubkey`/`genpsk`) and for `awg show` while debugging. It is deliberately not what brings the interface up.
 
 ## Images
 
@@ -55,8 +48,10 @@ keep in sync.
 | `vaiprog/amnezia-wg-1`    | 1.0 | 33.3 MB | `v0.2.12`      | Jc/Jmin/Jmax, S1/S2, fixed H1–H4                          |
 | `vaiprog/amnezia-wg-15`   | 1.5 | 34.1 MB | `v0.2.14-beta-awg-1.5-1` | + I1–I5 special junk (`<b> <c> <t> <r> <wt>` only), `Itime` |
 | `vaiprog/amnezia-wg-2`    | 2.0 | 33.4 MB | `v0.2.19`      | + S3/S4, H1–H4 as ranges, `<rc> <rd> <d> <ds> <dz>` chain tags |
-| `vaiprog/amnezia-wg-3`    | 3.0 | 33.4 MB | `v3.0.2`       | + HeaderProtectionKey, ContentPaddingAddition, timer ranges |
+| `vaiprog/amnezia-wg-3`    | 3.0 | 33.4 MB | `v3.0.20260805` | + HeaderProtectionKey, ContentPaddingAddition, timer ranges |
+| `vaiprog/amnezia-wg-31`   | 3.1 | 33.4 MB | `v3.1.20260828` | + RandomTrailers and DisableCookies |
 | `vaiprog/amnezia-wg-dns`  | —   | 19.6 MB | —              | unbound; the tunnel-only resolver, see [DNS](#dns-with-no-leaks) |
+| `vaiprog/amnezia-wg-status` | — | 30.1 MB | —              | amiunder.vpn, the tunnel's own status page |
 
 The major number is spelled without its dot — `amnezia-wg-15`, not
 `amnezia-wg-1.5` — because a Docker repository path segment containing a dot
@@ -111,18 +106,26 @@ tag, not by reading release notes:
   0.2.x and the complete 2.0 set.
 * `v3.0.x` adds `header_protection_key`, `content_padding_addition`,
   `rekey_after_time`, `rekey_timeout`, `reject_after_time`, `keepalive_timeout`
-  and `max_handshake_attempts`. `v3.0.2` is pinned; it carries the same UAPI
-  surface as `v3.0.1`.
+  and `max_handshake_attempts`. The newest 3.0 tag is pinned — `v3.0.20260805`,
+  which carries the keepalive fix over `v3.0.3` — so the 3.0 image tracks
+  patches without ever picking up a 3.1 daemon.
+* `v3.1.x` adds `random_trailers` and `disable_cookies`. Pinned at
+  `v3.1.20260828`, the tag that fixes RandomTrailers panicking on a cookie
+  reply and DisableCookies not disabling the whole underload.
 
-Go 1.25 is the build floor — `amneziawg-go v3.0.2`'s `go.mod` says `go 1.25.0`
-and its Makefile builds with `GOTOOLCHAIN=local`, so a 1.24 image fails
+The tools the image builds come from `amneziawg-tools` and are pinned at
+`v3.1.20260812`, which knows the 3.x keys — but they are used for key material
+and for reading state, never for bringing the interface up.
+
+Go 1.25 is the build floor — the `v3.0.x` `go.mod` says `go 1.25.0`
+and the Makefile builds with `GOTOOLCHAIN=local`, so a 1.24 image fails
 outright. The image builds on `golang:1.26-alpine`, which satisfies that floor
 and also builds the older tags.
 
 ### Build
 
 ```sh
-./build.sh              # all four, plus the resolver
+./build.sh              # all five, plus the resolver and the status page
 ./build.sh 3.0          # just one
 ./build.sh dns          # just the resolver
 AWG_IMAGE_PREFIX=ghcr.io/you/ ./build.sh
@@ -142,7 +145,9 @@ docker push vaiprog/amnezia-wg-1:latest
 docker push vaiprog/amnezia-wg-15:latest
 docker push vaiprog/amnezia-wg-2:latest
 docker push vaiprog/amnezia-wg-3:latest
+docker push vaiprog/amnezia-wg-31:latest
 docker push vaiprog/amnezia-wg-dns:latest
+docker push vaiprog/amnezia-wg-status:latest
 ```
 
 `:latest` is what `build.sh` tags. To publish an immutable tag alongside it —
@@ -150,8 +155,10 @@ worth doing, because `latest` on a VPN daemon is a moving target — tag the
 `amneziawg-go` version in as well and push both:
 
 ```sh
-docker tag  vaiprog/amnezia-wg-3:latest vaiprog/amnezia-wg-3:v3.0.2
-docker push vaiprog/amnezia-wg-3:v3.0.2
+docker tag  vaiprog/amnezia-wg-3:latest vaiprog/amnezia-wg-3:v3.0.20260805
+docker push vaiprog/amnezia-wg-3:v3.0.20260805
+docker tag  vaiprog/amnezia-wg-31:latest vaiprog/amnezia-wg-31:v3.1.20260828
+docker push vaiprog/amnezia-wg-31:v3.1.20260828
 docker tag  vaiprog/amnezia-wg-2:latest vaiprog/amnezia-wg-2:v0.2.19
 docker push vaiprog/amnezia-wg-2:v0.2.19
 docker tag  vaiprog/amnezia-wg-15:latest vaiprog/amnezia-wg-15:v0.2.14-beta-awg-1.5-1

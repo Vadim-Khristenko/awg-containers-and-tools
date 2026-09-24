@@ -16,17 +16,14 @@ A single-purpose image that runs an **AmneziaWG __AWG__** endpoint — server or
 
 ## Why this image exists
 
-Nothing upstream lets you self-host AmneziaWG 3.0. The official path configures tunnels through `awg-quick`, which hands the `.conf` to `awg setconf` — and that parser, in `amneziawg-tools`, still understands only the 2.0 key set. Give it a 3.0 config and it stops on the first line it does not know:
+Self-hosting AmneziaWG 3.x needs a config path that actually reaches the daemon. These images skip `awg-quick` entirely and write the configuration straight to `amneziawg-go`'s UAPI socket: one request format, one code path, valid for every generation from 1.0 to 3.1 and independent of what the `amneziawg-tools` in the image do or do not parse in a given release — `amneziawg-tools` used to know only the 2.0 keys, and this is not the first time the tools trailed the daemon.
 
+```bash
+$ docker exec awg awg-uapi get | head -1
+listen_port=51820
 ```
-$ awg setconf awg0 awg0.conf
-Line unrecognized: `HeaderProtectionKey=...'
-Configuration parsing error
-```
 
-The daemon is fine. `amneziawg-go` implements 3.0 completely. Only the layer in front of it lags. So these images skip that layer and talk to the daemon over its UAPI socket, which accepts every 3.0 key today.
-
-The images for 1.0, 1.5 and 2.0 exist so the same tooling covers whatever your clients actually run.
+The images for 1.0, 1.5, 2.0 and 3.1 exist so the same tooling covers whatever your clients actually run.
 
 ## Quick start
 

@@ -20,7 +20,7 @@ Line unrecognized: `HeaderProtectionKey=...'
 Configuration parsing error
 ```
 
-The daemon itself is fine — `amneziawg-go` v3.0.2 implements 3.0 completely. Only the config path in front of it is behind. So this project skips that path and talks to the daemon directly over its UAPI socket, which accepts every 3.0 key today.
+The daemon itself is fine — `amneziawg-go` implements 3.0 (and now 3.1) completely. Only the config path in front of it lagged behind: `amneziawg-tools` knew only the 2.0 keys for a long time, and the 3.x keys arrived in it much later than the daemon. So this project skips that path and talks to the daemon directly over its UAPI socket — one request format that covers 1.0 through 3.1 and does not depend on what the tools in the image happen to parse.
 
 That is the whole trick. Everything else here is packaging, parameter generation and making it pleasant to use.
 
@@ -34,8 +34,9 @@ Official self-hosted 3.0 will land upstream sooner or later. When it does, use i
 
 | | |
 |---|---|
-| **Four server images** | one per protocol generation, ~33 MB each |
+| **Five server images** | one per protocol generation, ~33 MB each |
 | **A DNS resolver image** | ~20 MB, reachable only from inside the tunnel |
+| **A status page image** | `amiunder.vpn` — what your tunnel sees, and how fast it gets there |
 | **`awg-tool`** | generates parameters, exports `.conf` and `vpn://`, installs servers over SSH |
 | **An interactive UI** | run `awg-tool` with no arguments |
 
@@ -46,8 +47,8 @@ Images are published on Docker Hub under [`vaiprog`](https://hub.docker.com/u/va
 | `vaiprog/amnezia-wg-1` | AWG 1.0 | amneziawg-go v0.2.12 |
 | `vaiprog/amnezia-wg-15` | AWG 1.5 | amneziawg-go v0.2.14-beta-awg-1.5-1 |
 | `vaiprog/amnezia-wg-2` | AWG 2.0 | amneziawg-go v0.2.19 |
-| `vaiprog/amnezia-wg-3` | AWG 3.0 | amneziawg-go v3.0.2 |
-| `vaiprog/amnezia-wg-31` | AWG 3.1 | amneziawg-go v3.1.20260814 |
+| `vaiprog/amnezia-wg-3` | AWG 3.0 | amneziawg-go v3.0.20260805 |
+| `vaiprog/amnezia-wg-31` | AWG 3.1 | amneziawg-go v3.1.20260828 |
 | `vaiprog/amnezia-wg-dns` | — | unbound |
 | `vaiprog/amnezia-wg-status` | — | the tunnel's own status page |
 
@@ -67,7 +68,7 @@ cd awg-containers-and-tools/containers
 Generate one parameter block and paste it into **both** `server.conf` and `client.conf` — the obfuscation parameters have to match on the two ends, or the peers will not recognise each other's packets:
 
 ```bash
-awg-tool gen --version 3.0
+cargo run -p awg-cli -- gen --version 3.0    # or the release binary, once built
 ```
 
 Add your keys and addresses, then:
@@ -98,16 +99,35 @@ The survey makes no outbound connections *from* your server: the endpoint addres
 
 Connection profiles are saved so the second run is `--server NAME`. Passwords only reach the disk if you ask for that.
 
+### Where the binary comes from
+
+There are published binaries for every release since `0.3.0` — `awg-tool-linux-amd64`, `awg-tool-linux-arm64`, plus checksums. If you would rather build it yourself:
+
+```bash
+cargo build --release            # needs Rust 1.90+, edition 2024
+./target/release/awg-tool --help
+```
+
+or run it without installing:
+
+```bash
+cargo run -p awg-cli -- gen --version 3.0
+```
+
+Every `awg-tool ...` line below means the release binary once it exists, and
+`cargo run -p awg-cli -- ...` until then.
+
 ### Managing what is already there
 
 ```bash
 awg-tool status --server home     # what is running, peers, handshakes, traffic
+awg-tool status --local           # the containers on this machine, no SSH
 awg-tool doctor                   # why is it not carrying traffic?
 awg-tool logs --lines 200         # the log, with key material stripped out
 awg-tool update                   # is the tool, or an image, out of date?
 ```
 
-`status` finds our containers by image reference, so a node someone renamed is still found, and a container that is not ours is not touched.
+`status` finds our containers by image reference, so a node someone renamed is still found, and a container that is not ours is not touched. With neither `--server` nor `--host` given, a machine that already runs our containers answers locally instead of asking which server you meant — that is what makes `awg-tool status` useful on the laptop you just ran `docker compose up` on. `--local` forces that; `--container NAME` (or `auto`) picks one node when several are up.
 
 `doctor` returns a verdict with a confidence level, the evidence behind it and the next step — not a wall of log text. It distinguishes a missing `/dev/net/tun` from a missing `NET_ADMIN` from `ip_forward` being off from a peer that has simply never handshaked, and when the evidence cannot separate two causes it says so and lists both instead of picking the likelier one.
 
@@ -121,6 +141,9 @@ awg-tool gen --version 2.0 --client amneziawg-windows --browser chrome
 awg-tool gen --version 3.0 --uapi          # UAPI lines instead of .conf
 awg-tool gen --version 3.1 --random-trailers   # the 3.1 switches, off by default
 awg-tool gen --version 3.1 --disable-cookies   # breaks NAT keepalive under load — know why before using
+awg-tool gen --version 3.0 --junk 7            # how much junk before the handshake (default 5, 0 turns the train off)
+awg-tool gen --version 3.1 --narrow-h          # ~20k H windows: the 3.1 CPU workaround, ignored elsewhere
+awg-tool gen --version 3.0 --extreme           # push ceilings instead of expectations: Jc to 128, S3 past 64
 ```
 
 ---
@@ -227,6 +250,8 @@ Two tools live inside every node image for exactly that moment:
 
 ```bash
 awg-health                       # exit 0 and a green docker ps status when the node can carry traffic
+awg-under                        # "am I under the VPN?" from inside the node
+awg-leak                         # resolver and routing leak check from inside the node
 awg-dump > dump.txt              # the whole picture, made for pasting
 ```
 
@@ -261,14 +286,14 @@ Working today: parameter generation for all five versions, the interactive UI, a
 
 Planned: a web UI, WASM builds, Android builds.
 
-This is release `0.2.2`. There are 326 tests, the containers are verified against live tunnels rather than smoke tests, and `install` is exercised end to end against a throwaway VM — but the tool is young, so please report what breaks.
+This is release `0.4.0`. There are 334 tests (306 in `awg-core`, 28 in `awg-cli`) — all green — the containers are verified against live tunnels rather than smoke tests, and `install` is exercised end to end against a throwaway VM — but the tool is young, so please report what breaks.
 
 ### Verifying a download
 
 Every release ships a checksum file named after its tag:
 
 ```bash
-sha256sum -c checksums-v0.2.2.sha256
+sha256sum -c checksums-v0.4.0.sha256
 ```
 
 The binaries are not signed. The checksum tells you the file arrived intact; it does not tell you who built it.
