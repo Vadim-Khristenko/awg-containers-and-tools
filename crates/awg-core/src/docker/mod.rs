@@ -54,8 +54,9 @@ pub use diagnose::{
     diagnose, diagnose_container, parse_port_traffic, port_traffic_command,
 };
 pub use discover::{
-    Container, ContainerState, PS_FORMAT, PublishedPort, apply_label_evidence, find_awg_containers,
-    list_containers, parse_label_ids, parse_ports, parse_ps, ps_command, ps_label_command,
+    Container, ContainerState, PS_FORMAT, PublishedPort, apply_label_evidence, docker_available,
+    find_awg_containers, find_local_containers, list_containers, parse_label_ids, parse_ports,
+    parse_ps, pick_container, ps_command, ps_label_command,
 };
 pub use health::{
     Health, PROBE_MARKER, UapiDevice, UapiPeer, UdpStats, health, health_probe_command,

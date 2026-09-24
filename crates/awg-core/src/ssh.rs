@@ -598,7 +598,7 @@ pub fn sudo_command(cmd: &str) -> String {
 /// POSIX single-quoting: inside single quotes nothing is special, so the quote
 /// itself is the only thing to deal with — end the string, escape one quote,
 /// start it again.
-fn single_quote(s: &str) -> String {
+pub(crate) fn single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 

@@ -11,24 +11,28 @@ use crate::versions::AwgVersion;
 ///
 /// The major number is spelled without its dot because a Docker path segment
 /// containing one reads as a registry host — see `containers/build.sh`.
-pub const AWG_REPOSITORIES: [&str; 5] = [
+pub const AWG_REPOSITORIES: [&str; 7] = [
     "amnezia-wg-1",
     "amnezia-wg-15",
     "amnezia-wg-2",
     "amnezia-wg-3",
+    "amnezia-wg-31",
     "amnezia-wg-dns",
+    "amnezia-wg-status",
 ];
 
 /// The label every image in this project carries, holding the protocol
 /// generation. The fallback for an image retagged to something private.
 pub const PROTOCOL_LABEL: &str = "space.vai-rice.awg.protocol";
 
-/// Which protocol generation an image is for. The resolver has no protocol of
-/// its own, hence the separate variant rather than a fifth [`AwgVersion`].
+/// Which protocol generation an image is for. The resolver and the status page
+/// have no protocol of their own, hence the separate variants rather than more
+/// [`AwgVersion`]s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Generation {
     Awg(AwgVersion),
     Dns,
+    Status,
 }
 
 impl Generation {
@@ -36,14 +40,15 @@ impl Generation {
         match self {
             Generation::Awg(v) => v.as_str(),
             Generation::Dns => "dns",
+            Generation::Status => "status",
         }
     }
 
-    /// The protocol generation, or `None` for the resolver.
+    /// The protocol generation, or `None` for the images that carry none.
     pub fn awg(self) -> Option<AwgVersion> {
         match self {
             Generation::Awg(v) => Some(v),
-            Generation::Dns => None,
+            Generation::Dns | Generation::Status => None,
         }
     }
 
@@ -54,7 +59,9 @@ impl Generation {
             "amnezia-wg-15" => Some(Generation::Awg(AwgVersion::V1_5)),
             "amnezia-wg-2" => Some(Generation::Awg(AwgVersion::V2_0)),
             "amnezia-wg-3" => Some(Generation::Awg(AwgVersion::V3_0)),
+            "amnezia-wg-31" => Some(Generation::Awg(AwgVersion::V3_1)),
             "amnezia-wg-dns" => Some(Generation::Dns),
+            "amnezia-wg-status" => Some(Generation::Status),
             _ => None,
         }
     }
@@ -64,6 +71,9 @@ impl Generation {
         let v = value.trim();
         if v.eq_ignore_ascii_case("dns") {
             return Some(Generation::Dns);
+        }
+        if v.eq_ignore_ascii_case("status") {
+            return Some(Generation::Status);
         }
         AwgVersion::parse(v).map(Generation::Awg)
     }
@@ -224,6 +234,35 @@ mod tests {
         assert_eq!(r.repository, "amnezia-wg-dns");
         assert_eq!(r.generation(), Some(Generation::Dns));
         assert_eq!(r.generation().unwrap().awg(), None, "dns has no protocol");
+    }
+
+    #[test]
+    fn the_31_node_and_the_side_images_are_recognised() {
+        let n = parse_image_ref("vaiprog/amnezia-wg-31:latest").unwrap();
+        assert!(n.is_awg());
+        assert_eq!(n.generation(), Some(Generation::Awg(AwgVersion::V3_1)));
+
+        // The resolver and the page are ours but are not tunnel nodes, which is
+        // what `awg()` is for: a command that talks to one node must not pick
+        // the status container.
+        for side in [
+            "vaiprog/amnezia-wg-dns:latest",
+            "vaiprog/amnezia-wg-status:latest",
+        ] {
+            let r = parse_image_ref(side).unwrap();
+            assert!(r.is_awg(), "{side} is ours");
+            assert_eq!(
+                r.generation().unwrap().awg(),
+                None,
+                "{side} has no protocol"
+            );
+        }
+        assert_eq!(
+            parse_image_ref("vaiprog/amnezia-wg-status:latest")
+                .unwrap()
+                .generation(),
+            Some(Generation::Status)
+        );
     }
 
     #[test]

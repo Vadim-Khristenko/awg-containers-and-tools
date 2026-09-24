@@ -290,6 +290,78 @@ pub fn find_awg_containers(host: &Host) -> Result<Vec<Container>> {
         .collect())
 }
 
+/// The same, on the machine this process is running on.
+pub fn find_local_containers() -> Result<Vec<Container>> {
+    find_awg_containers(&Host::local())
+}
+
+/// Is there a docker on this machine, and does its daemon answer?
+pub fn docker_available() -> bool {
+    matches!(Host::local().run("docker version"), Ok((_, _, 0)))
+}
+
+/// The single node a command should talk to.
+///
+/// `name` is a container name, or `auto` — and `None` means the same thing on
+/// purpose: this project exists to run several generations side by side, so
+/// when more than one node is up the only honest answers are "here they are,
+/// name one" or a guess that may report the wrong tunnel. Resolver and status
+/// containers are never candidates: they have no protocol to ask about.
+pub fn pick_container<'a>(found: &'a [Container], name: Option<&str>) -> Result<&'a Container> {
+    if let Some(n) = name.filter(|n| *n != "auto") {
+        return found.iter().find(|c| c.name == n).ok_or_else(|| {
+            Error::Config(format!(
+                "no container called {n:?} here; on this host: {}",
+                names(found)
+            ))
+        });
+    }
+
+    let nodes: Vec<&Container> = found
+        .iter()
+        .filter(|c| c.generation.and_then(Generation::awg).is_some())
+        .collect();
+    let running: Vec<&Container> = nodes
+        .iter()
+        .copied()
+        .filter(|c| c.state.is_running())
+        .collect();
+
+    match (running.as_slice(), nodes.as_slice()) {
+        ([one], _) => Ok(one),
+        (_, [one]) => Ok(one),
+        ([], []) => Err(Error::Config(
+            "no AmneziaWG node was found here; `awg-tool containers` lists what is there".into(),
+        )),
+        _ => Err(Error::Config(format!(
+            "several nodes are here, so this one needs a name: {}",
+            names_ref(&running)
+        ))),
+    }
+}
+
+fn names_ref(found: &[&Container]) -> String {
+    if found.is_empty() {
+        return "nothing".into();
+    }
+    found
+        .iter()
+        .map(|c| format!("{} ({})", c.name, c.state.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn names(found: &[Container]) -> String {
+    if found.is_empty() {
+        return "nothing".into();
+    }
+    found
+        .iter()
+        .map(|c| format!("{} ({})", c.name, c.state.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +388,48 @@ mod tests {
 7a1b\tvaiprog/amnezia-wg-dns:latest\tawg-dns\trunning\tUp 4 minutes\t2026-07-28 21:00:00 +0300 MSK\t
 3c4d\tnginx:latest\tweb\trunning\tUp 2 hours\t2026-07-28 19:00:00 +0300 MSK\t0.0.0.0:80->80/tcp
 5e6f\tvaiprog/amnezia-wg-2:latest\tsomeones-own-name\texited\tExited (1) 3 minutes ago\t2026-07-28 20:00:00 +0300 MSK\t";
+
+    /// `docker ps` output without the literal tabs: `|` splits the fields.
+    fn ps(lines: &[&str]) -> Vec<Container> {
+        parse_ps(&lines.join("\n").replace('|', "\t"))
+    }
+
+    const NODE_3: &str =
+        "aa|vaiprog/amnezia-wg-3:latest|awg-3|running|Up 4 minutes|2026|0.0.0.0:51820->51820/udp";
+    const SIDE_IMAGES: &[&str] = &[
+        "bb|vaiprog/amnezia-wg-dns:latest|awg-dns|running|Up 4 minutes|2026|",
+        "cc|vaiprog/amnezia-wg-status:latest|awg-status|running|Up 4 minutes|2026|",
+    ];
+
+    #[test]
+    fn one_node_is_picked_and_several_are_refused() {
+        let mut hosts = vec![NODE_3];
+        hosts.extend_from_slice(SIDE_IMAGES);
+        let c = ps(&hosts);
+
+        // The resolver and the page are ours but are not nodes to ask about.
+        for name in [None, Some("auto"), Some("awg-3")] {
+            assert_eq!(pick_container(&c, name).unwrap().name, "awg-3");
+        }
+
+        let mut two = hosts.clone();
+        two.push("dd|vaiprog/amnezia-wg-31:latest|awg-31|running|Up 1 minute|2026|");
+        let err = pick_container(&ps(&two), None).unwrap_err().to_string();
+        assert!(err.contains("awg-3") && err.contains("awg-31"), "{err}");
+
+        // A stopped node is still a candidate when it is the only one: `doctor`
+        // exists to be pointed at a node that is not running.
+        let stopped =
+            ps(&["ee|vaiprog/amnezia-wg-2:latest|awg-2|exited|Exited (1) 2 minutes ago|2026|"]);
+        assert_eq!(pick_container(&stopped, None).unwrap().name, "awg-2");
+
+        // A name that is not here says what is.
+        let err = pick_container(&c, Some("nope")).unwrap_err().to_string();
+        assert!(err.contains("nope") && err.contains("awg-3"), "{err}");
+
+        // Nothing at all is a diagnosis, not a panic.
+        assert!(pick_container(&[], None).is_err());
+    }
 
     #[test]
     fn detection_matches_on_the_image_and_not_on_the_name() {
