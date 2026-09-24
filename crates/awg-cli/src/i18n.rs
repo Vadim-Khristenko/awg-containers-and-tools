@@ -98,15 +98,18 @@ strings! {
     DonateArchitect => ("Config generator", "Генератор конфигураций"),
     DonateSources => ("Sources and issues", "Исходники и баг-репорты"),
     AboutAwg3 => (
-        "AWG 3.x support exists here because upstream ships no self-hosted 3.x:\nthe server pipeline drives awg-quick, and amneziawg-tools still parses only\nthe 2.0 keys. The daemon does understand 3.0 and 3.1, so this tool\nconfigures it over UAPI directly. 3.1 adds two switches — RandomTrailers\nappends a random tail to every outgoing packet, DisableCookies silences\ncookie replies — both off by default, because a server that quietly breaks\nNAT keepalive is worse than one turned on knowingly.",
-        "Поддержка AWG 3.x появилась потому, что у апстрима нет self-hosted 3.x:\nсерверный конвейер работает через awg-quick, а amneziawg-tools до сих пор\nразбирает только ключи 2.0. Сам демон 3.0 и 3.1 понимает — поэтому мы\nнастраиваем его напрямую через UAPI. В 3.1 два переключателя: RandomTrailers\nдописывает случайный хвост каждому исходящему пакету, DisableCookies\nзапрещает cookie-ответы — оба выключены по умолчанию: сервер, который тихо\nломает NAT keepalive, хуже включённого осознанно."
+        "AWG 3.x support exists because these images configure the device over\nUAPI: one request format covers 1.0 through 3.1, and the keys reach the\ndaemon as it parses them. 3.1 adds two switches — RandomTrailers appends a\nrandom tail to every outgoing packet, DisableCookies silences cookie replies —\nboth off by default, because a server that quietly breaks NAT keepalive is\nworse than one turned on knowingly.",
+        "Поддержка AWG 3.x есть, потому что эти образы настраивают устройство через\nUAPI: один формат запроса покрывает 1.0–3.1, и ключи доходят до демона в том\nвиде, в каком он их парсит. В 3.1 два переключателя: RandomTrailers дописывает\nслучайный хвост каждому исходящему пакету, DisableCookies запрещает\ncookie-ответы — оба выключены по умолчанию: сервер, который тихо ломает NAT\nkeepalive, хуже включённого осознанно."
     ),
     MenuGenerate => ("Generate a configuration", "Сгенерировать конфигурацию"),
     MenuDeploy => ("Deploy to a server", "Развернуть на сервере"),
     MenuAbout => ("About", "О программе"),
     MenuDonate => ("Support the project", "Поддержать проект"),
     LblIntensity => ("intensity", "интенсивность"),
+    LblJunk => ("junk level", "уровень мусора"),
     LblRouter => ("router mode", "режим роутера"),
+    LblExtreme => ("extreme", "экстремальный режим"),
+    LblNarrowH => ("narrow H (3.1)", "узкие H (3.1)"),
     LblFormat => ("format", "формат"),
     HintRegenerate => ("regenerate", "перегенерировать"),
     HintBack => ("back", "назад"),
@@ -138,6 +141,19 @@ strings! {
         "enable the <c> tag (off by default: ErrorCode 1000 on several builds)",
         "включить тег <c> (по умолчанию выключен: на ряде сборок ErrorCode 1000)"
     ),
+    OptJunk => (
+        "junk packets before the handshake, 0..32 (default 5)",
+        "мусорных пакетов перед хендшейком, 0..32 (по умолчанию 5)"
+    ),
+    OptExtreme => (
+        "push ceilings: Jc to 128, S3 past 64, wide H windows",
+        "поднять потолки: Jc до 128, S3 за 64, широкие окна H"
+    ),
+    OptNarrowH => (
+        "3.1 header windows: narrow (~20k, a CPU workaround) or wide; on 3.1 narrow is the default",
+        "окна заголовков 3.1: narrow (~20k, обход нагрузки CPU) или wide; на 3.1 по умолчанию narrow"
+    ),
+    ErrBadJunk => ("--junk out of range", "--junk вне допустимого диапазона"),
     Available => ("available", "доступно"),
     DefaultClient => ("default client", "клиент по умолчанию"),
     WarningsHeader => ("configuration warnings", "предупреждения по конфигурации"),
@@ -175,6 +191,15 @@ strings! {
     OptUserFlag => ("log in as this user (default: root)", "входить этим пользователем (по умолчанию root)"),
     OptKeyFlag => ("private key file to authenticate with", "файл приватного ключа для входа"),
     OptSudoFlag => ("docker on that host needs sudo", "docker на том хосте требует sudo"),
+    OptLocal => (
+        "use the docker on this machine instead of a saved profile",
+        "использовать docker на этой машине вместо сохранённого профиля"
+    ),
+    OptContainer => (
+        "container to act on: its name, or auto for the single running node",
+        "контейнер для действия: имя или auto для единственного запущенного узла"
+    ),
+    MsgLocally => ("this machine", "этой машине"),
     OptLinesFlag => ("how many log lines to fetch", "сколько строк журнала забрать"),
     MsgConnecting => ("connecting to", "подключаюсь к"),
     MsgUnknownHost => (

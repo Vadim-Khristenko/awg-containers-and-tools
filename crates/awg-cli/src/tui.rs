@@ -69,17 +69,23 @@ enum Field {
     Profile,
     Client,
     Intensity,
+    Junk,
     Router,
+    Extreme,
+    NarrowH,
     Format,
 }
 
 impl Field {
-    const ALL: [Field; 6] = [
+    const ALL: [Field; 9] = [
         Field::Version,
         Field::Profile,
         Field::Client,
         Field::Intensity,
+        Field::Junk,
         Field::Router,
+        Field::Extreme,
+        Field::NarrowH,
         Field::Format,
     ];
 
@@ -89,7 +95,10 @@ impl Field {
             Field::Profile => t(lang, K::LblProfile),
             Field::Client => t(lang, K::LblClient),
             Field::Intensity => t(lang, K::LblIntensity),
+            Field::Junk => t(lang, K::LblJunk),
             Field::Router => t(lang, K::LblRouter),
+            Field::Extreme => t(lang, K::LblExtreme),
+            Field::NarrowH => t(lang, K::LblNarrowH),
             Field::Format => t(lang, K::LblFormat),
         }
     }
@@ -264,9 +273,21 @@ impl App {
                 const I: [Intensity; 3] = [Intensity::Low, Intensity::Medium, Intensity::High];
                 self.opts.intensity = cycle(&I, self.opts.intensity, delta);
             }
+            Field::Junk => {
+                let lo = 0i32;
+                let hi = 32i32;
+                let v = (self.opts.junk_level as i32 + delta).clamp(lo, hi);
+                self.opts.junk_level = v as u8;
+            }
             Field::Router => {
                 self.opts.router_mode = !self.opts.router_mode;
                 self.opts.mimic.router_mode = self.opts.router_mode;
+            }
+            Field::Extreme => {
+                self.opts.extreme = !self.opts.extreme;
+            }
+            Field::NarrowH => {
+                self.opts.narrow_h = !self.opts.narrow_h;
             }
             // Format changes how the same parameters are printed, so it must
             // not draw new ones — regenerating here would look like the output
@@ -369,7 +390,10 @@ impl App {
                 Intensity::Medium => t(self.lang, K::ValMedium).into(),
                 Intensity::High => t(self.lang, K::ValHigh).into(),
             },
+            Field::Junk => self.opts.junk_level.to_string(),
             Field::Router => on_off(self.lang, self.opts.router_mode),
+            Field::Extreme => on_off(self.lang, self.opts.extreme),
+            Field::NarrowH => on_off(self.lang, self.opts.narrow_h),
             Field::Format => if self.show_uapi { "UAPI" } else { ".conf" }.to_string(),
         }
     }

@@ -61,11 +61,14 @@ fn main() {
 /// Every flag that consumes the argument after it. Needed in exactly one place
 /// — working out which word is the command — but wrong here means a flag's
 /// value gets run as a subcommand.
-const VALUE_FLAGS: [&str; 17] = [
+const VALUE_FLAGS: [&str; 20] = [
     "--version",
     "--profile",
     "--client",
     "--intensity",
+    "--junk",
+    "--narrow-h",
+    "--container",
     "--mtu",
     "--host",
     "--browser",
@@ -163,6 +166,9 @@ fn usage(lang: Lang) {
     println!("  --json               {}", t(lang, K::OptJson));
     println!("  --out client.conf    {}", t(lang, K::OptOut));
     println!("  --intensity medium   {}", t(lang, K::OptIntensity));
+    println!("  --junk 5             {}", t(lang, K::OptJunk));
+    println!("  --extreme            {}", t(lang, K::OptExtreme));
+    println!("  --narrow-h off       {}", t(lang, K::OptNarrowH));
     println!("  --router             {}", t(lang, K::OptRouter));
     println!("  --mtu 1500           {}", t(lang, K::OptMtu));
     println!("  --host example.com   {}", t(lang, K::OptHost));
@@ -180,6 +186,8 @@ fn usage(lang: Lang) {
     println!("  --port 22            {}", t(lang, K::OptSshPort));
     println!("  --key ~/.ssh/id_ed25519  {}", t(lang, K::OptKeyFlag));
     println!("  --sudo               {}", t(lang, K::OptSudoFlag));
+    println!("  --local              {}", t(lang, K::OptLocal));
+    println!("  --container NAME     {}", t(lang, K::OptContainer));
     println!("  --lines 200          {}", t(lang, K::OptLinesFlag));
     println!("  --listen-port 51820  {}", t(lang, K::OptListenPort));
     println!("  --endpoint 1.2.3.4   {}", t(lang, K::OptEndpoint));
@@ -253,12 +261,29 @@ fn cmd_gen(args: &[String], lang: Lang) {
     };
 
     let router_mode = has_flag(args, "--router");
+    let junk_level = match flag_value(args, "--junk").as_deref() {
+        None => 5,
+        Some(raw) => match raw.parse::<u8>() {
+            Ok(n) if n <= 32 => n,
+            _ => bail(lang, K::ErrBadJunk, raw, &["0..32"]),
+        },
+    };
+    let extreme = has_flag(args, "--extreme");
+    let narrow_h = match flag_value(args, "--narrow-h").as_deref() {
+        // Architect's default: harmless everywhere, a CPU fix on 3.1.
+        None => version == AwgVersion::V3_1,
+        Some("0" | "false" | "off" | "no") => false,
+        Some(_) => true,
+    };
     let opts = GenOptions {
         version,
         profile,
         intensity,
         client,
         router_mode,
+        extreme,
+        junk_level,
+        narrow_h,
         // The 3.1 switches. Both default off, and the capability gate inside
         // generate() eats them on anything older than 3.1 — a flag on a 3.0
         // run is silently a no-op rather than a config the device refuses.

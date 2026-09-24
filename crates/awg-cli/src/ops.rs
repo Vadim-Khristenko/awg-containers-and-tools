@@ -9,6 +9,7 @@ use awg_core::deploy::remote as remote_deploy;
 use awg_core::deploy::{prepare, survey};
 use awg_core::docker::{self, Container, Host};
 use awg_core::platform::Tool;
+use awg_core::profile;
 use awg_core::rng::SecureRng;
 use awg_core::ssh;
 use awg_core::update;
@@ -39,8 +40,68 @@ impl Connected {
     }
 }
 
-/// Connect and hand back the session plus the containers we recognise.
-fn survey(args: &[String], lang: Lang) -> (Connected, Vec<Container>) {
+/// Where the commands run: over SSH, or on this machine's own docker.
+enum Conn {
+    Local,
+    Ssh(Connected),
+}
+
+impl Conn {
+    fn host(&self) -> Host<'_> {
+        match self {
+            Conn::Local => Host::local(),
+            Conn::Ssh(c) => c.host(),
+        }
+    }
+}
+
+/// Connect and hand back the target plus the containers we recognise.
+///
+/// Precedence: `--local` names this machine; `--server`/`--host` name a remote
+/// one; and with neither given, a local docker that already has our containers
+/// wins over a saved profile — that is what makes `awg-tool status` useful on
+/// the laptop you just ran `docker compose up` on.
+fn survey(args: &[String], lang: Lang) -> (Conn, Vec<Container>) {
+    let wants_remote = args.iter().any(|a| a == "--server" || a == "--host");
+    let wants_local = args.iter().any(|a| a == "--local");
+    let local = match (wants_local, wants_remote) {
+        (true, _) => true,
+        (_, true) => false,
+        (false, false) => local_is_the_only_target(),
+    };
+
+    if !local {
+        return (Conn::Ssh(ssh_survey(args, lang)), local_containers());
+    }
+
+    eprintln!("{} {}", t(lang, K::MsgConnecting), t(lang, K::MsgLocally));
+    let found = docker::find_local_containers().unwrap_or_else(|e| fail(e.to_string()));
+    if found.is_empty() {
+        eprintln!("{}", t(lang, K::MsgNoContainers));
+    }
+    (Conn::Local, found)
+}
+
+/// With no target named: go local only when there is no saved profile to go to
+/// and this machine is actually running our containers.
+fn local_is_the_only_target() -> bool {
+    let has_profiles = profile::default_config_dir()
+        .ok()
+        .and_then(|dir| profile::load_all(&dir).ok())
+        .is_some_and(|all| !all.is_empty());
+    !has_profiles && docker_available()
+}
+
+/// Only worth asking about when there is something to find.
+fn docker_available() -> bool {
+    docker::docker_available()
+}
+
+fn local_containers() -> Vec<Container> {
+    docker::find_local_containers().unwrap_or_default()
+}
+
+fn ssh_survey(args: &[String], lang: Lang) -> Connected {
     let target = remote::resolve(args, lang).unwrap_or_else(|e| fail(e));
     eprintln!(
         "{} {}@{}…",
@@ -52,13 +113,11 @@ fn survey(args: &[String], lang: Lang) -> (Connected, Vec<Container>) {
     // Asked before the session moves into `Connected`, and only if the host
     // turns out to want it.
     let sudo_password = remote::sudo_password(&session, &target, lang);
-    let c = Connected {
+    Connected {
         session,
         sudo: target.profile.sudo_required,
         sudo_password,
-    };
-    let found = docker::find_awg_containers(&c.host()).unwrap_or_else(|e| fail(e.to_string()));
-    (c, found)
+    }
 }
 
 fn ago(secs: Option<u64>, lang: Lang) -> String {
@@ -80,7 +139,8 @@ pub fn cmd_status(args: &[String], lang: Lang) {
         return;
     }
 
-    for c in &found {
+    let chosen = pick(&found, flag(args, "--container").as_deref(), lang);
+    for c in &chosen {
         let generation = c
             .generation
             .map(|g| g.as_str().to_string())
@@ -160,7 +220,7 @@ pub fn cmd_logs(args: &[String], lang: Lang) {
 
     let (conn, found) = survey(args, lang);
     let host = conn.host();
-    let wanted = positional(args);
+    let wanted = flag(args, "--container").or_else(|| positional(args));
 
     // Said out loud, like the other commands. Printing nothing at all reads as
     // "the logs are empty", which is a different and much more worrying thing.
@@ -183,7 +243,7 @@ pub fn cmd_logs(args: &[String], lang: Lang) {
 pub fn cmd_doctor(args: &[String], lang: Lang) {
     let (conn, found) = survey(args, lang);
     let host = conn.host();
-    let wanted = positional(args);
+    let wanted = flag(args, "--container").or_else(|| positional(args));
 
     let mut any = false;
     for c in pick(&found, wanted.as_deref(), lang) {
@@ -430,7 +490,15 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 
 /// The first argument that is not a flag or a flag's value.
 fn positional(args: &[String]) -> Option<String> {
-    const TAKES_VALUE: [&str; 6] = ["--server", "--host", "--user", "--port", "--key", "--lines"];
+    const TAKES_VALUE: [&str; 7] = [
+        "--server",
+        "--host",
+        "--user",
+        "--port",
+        "--key",
+        "--lines",
+        "--container",
+    ];
     let mut skip = true; // args[0] is the command itself
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -447,10 +515,15 @@ fn positional(args: &[String]) -> Option<String> {
     None
 }
 
-/// All containers, or the one that was named.
+/// All containers, or the one that was named. `--container auto` (and a bare
+/// `auto`) binds to the single running node, refusing to guess between several.
 fn pick<'a>(found: &'a [Container], name: Option<&str>, lang: Lang) -> Vec<&'a Container> {
     match name {
         None => found.iter().collect(),
+        Some("auto") => match docker::pick_container(found, Some("auto")) {
+            Ok(c) => vec![c],
+            Err(e) => fail(e.to_string()),
+        },
         Some(n) => {
             let hit: Vec<&Container> = found.iter().filter(|c| c.name == n).collect();
             if hit.is_empty() {
