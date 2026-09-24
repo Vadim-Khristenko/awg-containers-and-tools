@@ -1,0 +1,81 @@
+#!/bin/sh
+# Leak check, run inside the node's own namespace: which resolver this node is
+# configured with, whether that resolver is reachable through the tunnel, and
+# where the default route goes.
+#
+#   awg-leak                 # a client node: DNS and routing
+#   AWG_CLIENT_DNS=1.1.1.1   # the resolver to expect (default 172.29.172.254)
+#
+# Exit 0 when nothing leaks, 1 when something does. Every line names what it
+# looked at, because "no leak" on a node nobody probed is not the same answer.
+set -eu
+
+IFACE="${AWG_IFACE:-awg0}"
+WANT_DNS="${AWG_CLIENT_DNS:-172.29.172.254}"
+CONF="${AWG_CONF:-/etc/amnezia/awg/${IFACE}.conf}"
+LEAK=0
+line() { printf '%-10s %s\n' "$1" "$2"; }
+
+# 1. The interface, and what this node is on the tunnel.
+mine=$(ip -o -4 addr show dev "$IFACE" 2>/dev/null | awk '{print $4}' | head -1) || true
+if [ -z "$mine" ]; then
+    line tunnel "DOWN — $IFACE has no IPv4 address"
+    exit 1
+fi
+line tunnel "$IFACE $mine"
+
+# 2. Is this a full tunnel? It decides whether a resolver outside the tunnel is
+#    a finding or simply not this node's job, so it is answered before anything
+#    is called a leak.
+full=0
+if [ -r "$CONF" ] && grep -qE '^[[:space:]]*AllowedIPs[[:space:]]*=.*0\.0\.0\.0/0' "$CONF"; then
+    full=1
+fi
+
+# 3. Which resolvers the node would actually use. A container gets docker's
+#    embedded resolver unless it was told otherwise: that one asks the host, so
+#    on a full tunnel it is a leak path — and it is also how the node resolves
+#    its own peers' names, which is why it is named rather than assumed.
+servers=$(awk '/^nameserver/{print $2}' /etc/resolv.conf 2>/dev/null | tr '\n' ' ' | sed 's/ *$//') || true
+case " $servers " in
+    *" $WANT_DNS "*) line resolver "$servers (the tunnel's own)" ;;
+    *" 127.0.0.11 "*)
+        if [ "$full" = 1 ]; then
+            line resolver "$servers (docker's embedded — it asks the host, and this is a full tunnel)"
+            LEAK=1
+        else
+            line resolver "$servers (docker's embedded — asks the host)"
+        fi ;;
+    "")              line resolver "none configured — the platform default will be used"; LEAK=1 ;;
+    *)               line resolver "$servers — not $WANT_DNS"; LEAK=1 ;;
+esac
+
+# 4. Does it answer? A resolver that is configured but unreachable is a leak
+#    waiting for a fallback, and one that answers is proof the query travelled
+#    into the tunnel.
+probe="${AWG_LEAK_QUERY:-example.com}"
+if timeout 8 nslookup "$probe" "$WANT_DNS" >/dev/null 2>&1; then
+    line dns "$WANT_DNS answered for $probe"
+else
+    line dns "$WANT_DNS did not answer for $probe"
+    LEAK=1
+fi
+
+# 5. Where the default route goes — only meaningful on a full tunnel, so the
+#    config is what decides whether this is a finding.
+default=$(ip route show default 2>/dev/null | awk 'NR==1{print $3, $5}') || true
+if [ "$full" = 1 ]; then
+    case " ${default:-} " in
+        *" $IFACE ") line default "via $IFACE — the tunnel" ;;
+        *)          line default "${default:-none} — not the tunnel"; LEAK=1 ;;
+    esac
+else
+    line default "${default:-none} (not a full tunnel, so this is expected)"
+fi
+
+if [ "$LEAK" = 0 ]; then
+    line verdict "no leak found from inside this node"
+else
+    line verdict "LEAK: see the lines above"
+fi
+exit "$LEAK"

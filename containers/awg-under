@@ -1,0 +1,43 @@
+#!/bin/sh
+# "Am I under the VPN?" — asked from inside the node, the way amiunder.vpn
+# asks it in a browser. Fetch the page, and read the answer two ways: that it
+# answered at all (the page is reachable only through the tunnel), and which
+# address it saw.
+#
+#   awg-under [url|host]        default amiunder.vpn
+#   AWG_UNDER_EXPECT=<addr>     the address the far end should report
+#
+# Exit 0 with one line when it answered; 1 and the reason when it did not.
+set -eu
+
+IFACE="${AWG_IFACE:-awg0}"
+target="${1:-${AWG_UNDER_URL:-amiunder.vpn}}"
+case "$target" in
+    http://*|https://*) URL="$target" ;;
+    */cgi-bin/*)        URL="http://$target" ;;
+    *)                  URL="http://$target/cgi-bin/whoami" ;;
+esac
+
+# This node's own address on the tunnel: what the far end reports when nothing
+# translates the path in between.
+mine=$(ip -o -4 addr show dev "$IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1) || true
+want="${AWG_UNDER_EXPECT:-$mine}"
+if [ -z "$mine" ]; then
+    echo "not under the VPN: $IFACE has no IPv4 address — there is no tunnel here" >&2
+    exit 1
+fi
+
+seen=$(curl -fsS --max-time "${AWG_UNDER_TIMEOUT:-8}" "$URL" 2>/dev/null | head -1 | tr -d '[:space:]') || true
+if [ -z "$seen" ]; then
+    echo "not under the VPN: nothing answered at $URL" >&2
+    exit 1
+fi
+
+if [ "$seen" = "$want" ]; then
+    echo "under the VPN: $URL answered and sees $seen, which is this node on $IFACE"
+else
+    # Reached it, but as somebody else: a NAT in the path, or a page that is
+    # not the one this check is for. Still an answer from inside the tunnel.
+    echo "under the VPN: $URL answered, seeing $seen (this node is $mine on $IFACE — the path is translated)"
+fi
+
