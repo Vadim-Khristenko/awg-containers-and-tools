@@ -27,15 +27,19 @@ case "$V" in
     3.1) IMG=${PREFIX}amnezia-wg-31:latest ;;
 esac
 DNSIMG=${PREFIX}amnezia-wg-dns:latest
+STATUSIMG=${PREFIX}amnezia-wg-status:latest
 
 NET=awgdnstest-transport
 DNSNET=awgdnstest-resolver
 SRV=awg-dnstest-server
 CLI=awg-dnstest-client
 DNS=awg-dnstest-dns
+STATUS=awg-dnstest-status
 BY1=awg-dnstest-bystander-net
 BY2=awg-dnstest-bystander-bridge
 RESOLVER=172.29.172.254
+# The slot unbound.conf answers amiunder.vpn with.
+STATUS_IP=172.29.172.253
 QUERY=${AWG_DNS_QUERY:-example.com}
 WORK=
 AWG_TOOL=${AWG_TOOL:-$(dirname "$0")/../target/debug/awg-tool}
@@ -44,7 +48,7 @@ FAIL=0
 hr()    { printf '\n===== %s =====\n' "$*"; }
 check() { if [ "$1" = 0 ]; then echo "  PASS  $2"; else echo "  FAIL  $2"; FAIL=1; fi; }
 cleanup() {
-    docker rm -f "$SRV" "$CLI" "$DNS" "$BY1" "$BY2" >/dev/null 2>&1
+    docker rm -f "$SRV" "$CLI" "$DNS" "$STATUS" "$BY1" "$BY2" >/dev/null 2>&1
     docker network rm "$NET" "$DNSNET" >/dev/null 2>&1
     if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
 }
@@ -90,7 +94,7 @@ $params
 [Peer]
 PublicKey = $srv_pub
 PresharedKey = $psk
-AllowedIPs = 10.98.0.0/24, $RESOLVER/32
+AllowedIPs = 10.98.0.0/24, $RESOLVER/32, $STATUS_IP/32
 Endpoint = $SRV:51820
 PersistentKeepalive = 15
 EOF
@@ -110,6 +114,9 @@ EOF
 
 docker run -d --name "$DNS" --network "$DNSNET" --ip "$RESOLVER" \
     -v "$WORK/blocklist.txt:/etc/unbound/blacklist.d/test.txt:ro" "$DNSIMG" >/dev/null || exit 1
+# The status page, at the slot unbound.conf answers amiunder.vpn with, so the
+# name, the resolver and the page are tested together rather than one at a time.
+docker run -d --name "$STATUS" --network "$DNSNET" --ip "$STATUS_IP" "$STATUSIMG" >/dev/null || exit 1
 docker run -d --name "$SRV" --network "$NET" --ip 172.31.98.10 \
     --cap-add NET_ADMIN --device /dev/net/tun --sysctl net.ipv4.ip_forward=1 \
     -v "$WORK/server.conf:/etc/amnezia/awg/awg0.conf:ro" "$IMG" >/dev/null || exit 1
@@ -180,6 +187,38 @@ out_sub=$(docker exec "$CLI" timeout 8 nslookup deep.sub.example.net "$RESOLVER"
 out_ctl=$(docker exec "$CLI" timeout 8 nslookup example.org "$RESOLVER" 2>&1); rc_ctl=$?
 echo "$out_ctl" | tail -3
 [ "$rc_ctl" = 0 ]; check $? "non-blacklisted example.org still resolves"
+
+# DIRECTION 5 — the page. amiunder.vpn is answered by the tunnel resolver and
+# lives on the resolver network, so the name answering, the page loading and
+# `awg-under` are three ways of proving the same thing from both sides.
+hr "DIRECTION 5 — amiunder.vpn answers through the tunnel, and nothing else"
+out_name=$(docker exec "$CLI" timeout 8 nslookup amiunder.vpn "$RESOLVER" 2>&1)
+echo "$out_name" | tail -3
+grep -q "$STATUS_IP" <<< "$out_name"; check $? "the tunnel resolver answers amiunder.vpn with $STATUS_IP"
+out_tld=$(docker exec "$BY1" timeout 8 nslookup amiunder.vpn 2>&1); rc_tld=$?
+[ "$rc_tld" != 0 ]; check $? "a bystander cannot resolve amiunder.vpn — .vpn is not a real TLD"
+out_page=$(docker exec "$CLI" timeout 8 curl -fsS "http://$STATUS_IP/" 2>&1 | head -1)
+echo "client page: $out_page"
+grep -qi 'doctype html' <<< "$out_page"; check $? "the client fetched the page through the tunnel"
+docker exec "$BY1" timeout 5 curl -fsS "http://$STATUS_IP/" >/dev/null 2>&1; rc_by_page=$?
+[ "$rc_by_page" != 0 ]; check $? "the same page is unreachable from a container outside the tunnel"
+
+# DIRECTION 6 — the utilities that ship in every node image, run where they are
+# meant to run: inside the client.
+hr "DIRECTION 6 — awg-under and awg-leak, inside the client"
+out_under=$(docker exec "$CLI" awg-under "$STATUS_IP" 2>&1); rc_under=$?
+echo "$out_under"
+[ "$rc_under" = 0 ]; check $? "awg-under says the client is under the VPN"
+out_leak=$(docker exec "$CLI" awg-leak 2>&1); rc_leak=$?
+echo "$out_leak"
+[ "$rc_leak" = 0 ]; check $? "awg-leak finds no leak on the client"
+# The client's own resolver is docker's embedded one — the tunnel resolver has
+# to be asked for by address — so what this asserts is that the tool says so
+# instead of reporting a resolver the node does not have. The proof that it can
+# fail lives in utiltest.sh, where a fake full tunnel is built for it.
+out_named=$(docker exec "$CLI" env AWG_CLIENT_DNS="$RESOLVER" awg-leak 2>&1)
+echo "$out_named" | head -2
+grep -q "docker's embedded" <<< "$out_named"; check $? "awg-leak names docker's embedded resolver instead of the tunnel's"
 
 hr "RESULT"
 if [ "$FAIL" = 0 ]; then

@@ -13,8 +13,8 @@ declare -A GO_TAG=(
     [1.0]=v0.2.12
     [1.5]=v0.2.14-beta-awg-1.5-1
     [2.0]=v0.2.19
-    [3.0]=v3.0.2
-    [3.1]=v3.1.20260814
+    [3.0]=v3.0.20260805
+    [3.1]=v3.1.20260828
 )
 # Docker Hub names. The major number is spelled without its dot: a repository
 # path segment containing one reads as a registry host, so `amnezia-wg-1.5`
@@ -30,7 +30,7 @@ declare -A IMAGE=(
 )
 
 REGISTRY="${AWG_IMAGE_PREFIX:-vaiprog/}"
-TOOLS_TAG="${AWG_TOOLS_VERSION:-v1.0.20260618-2}"
+TOOLS_TAG="${AWG_TOOLS_VERSION:-v3.1.20260812}"
 # One timestamp for the whole run, so images built together agree on when they
 # were built. RFC 3339, which is what org.opencontainers.image.created wants.
 BUILD_DATE="${SOURCE_DATE_EPOCH:+$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)}"

@@ -1,19 +1,16 @@
 #!/bin/bash
-# Brings up an AmneziaWG interface — 1.0, 1.5, 2.0 or 3.0 — from a .conf file.
+# Brings up an AmneziaWG interface — 1.0, 1.5, 2.0, 3.0 or 3.1 — from a .conf file.
 #
-# Why not awg-quick: amneziawg-tools, on released tags *and* on master, parses
-# only the AWG 2.0 keys. A config carrying HeaderProtectionKey,
-# ContentPaddingAddition or the randomised timer ranges cannot be brought up
-# with awg-quick at all — setconf never learns those words. amneziawg-go accepts
-# every one of them on its UAPI socket, so this script translates the .conf into
-# a UAPI `set=1` request and writes it to the socket itself.
+# It translates the `.conf` into a UAPI `set=1` request and writes that to the
+# daemon's socket rather than calling awg-quick: one code path serves every
+# generation, and the keys reach the daemon whatever the tools in the image do
+# or do not parse today. amneziawg-tools historically lagged behind 3.0 here,
+# which is where this approach came from.
 #
-# The same code path serves every protocol generation: only the keys actually
-# present in the file are ever emitted, so a 1.0 config produces a 1.0 request.
-#
-# Along the way it writes an operational event log — starts, restarts, the
-# interface coming up, peers installed — with no key material in it at all. See
-# awg-log.sh for what is recorded and what is deliberately left out.
+# Only the keys actually present in the file are ever emitted, so a 1.0 config
+# produces a 1.0 request. Along the way it writes an operational event log —
+# starts, restarts, the interface coming up, peers installed — with no key
+# material in it at all.
 set -euo pipefail
 
 IFACE="${AWG_IFACE:-awg0}"
@@ -149,6 +146,22 @@ done
 if [ -n "${IF[HeaderProtectionKey]:-}" ]; then
     addk header_protection_key "$(b64hex "${IF[HeaderProtectionKey]}")"
 fi
+
+# The 3.1 switches. Emitted only when the config carries them: a 3.0 device
+# refuses both keys, and an off switch is not a parameter. The daemon parses
+# them with boolf, so `1` is the value it wants — but `true`/`yes`/`on` are
+# accepted here too, because people write them.
+bool01() {
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) printf '1' ;;
+        *)             printf '0' ;;
+    esac
+}
+for map in RandomTrailers:random_trailers DisableCookies:disable_cookies; do
+    if [ -n "${IF[${map%%:*}]:-}" ]; then
+        addk "${map#*:}" "$(bool01 "${IF[${map%%:*}]}")"
+    fi
+done
 
 # --- peers -------------------------------------------------------------------
 # amneziawg-go's ParseEndpoint is netip.ParseAddrPort: an IP literal and a port,

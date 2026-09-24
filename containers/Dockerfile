@@ -1,27 +1,25 @@
 # AmneziaWG server/client — unofficial, one image per protocol generation.
 #
 # Upstream ships no self-hosted 3.0: their server pipeline drives awg-quick, and
-# amneziawg-tools (released tags *and* master) still parses only the 2.0 keys.
-# The daemon does support 3.0 — header_protection_key, content_padding_addition
-# and the timer ranges are all accepted over UAPI — so this image configures the
-# device through the UAPI socket instead of writing a .conf the tools cannot
-# read. The same entrypoint then serves every generation, which is why there is
-# one Dockerfile and a build arg rather than four near-identical files: the only
-# thing that actually differs between the four images is the daemon tag.
+# amneziawg-tools only learned the 3.x keys recently. The daemon has supported
+# them since v3.0.0 — so this image configures the device through the UAPI
+# socket instead of a .conf the tools may or may not read. One entrypoint serves
+# every generation, which is why there is one Dockerfile and a build arg rather
+# than five near-identical files: the only thing that differs is the daemon tag.
 #
 #   AWG 1.0  -> amneziawg-go v0.2.12                 Jc/Jmin/Jmax, S1/S2, fixed H1-H4
 #   AWG 1.5  -> amneziawg-go v0.2.14-beta-awg-1.5-1  + I1-I5 special junk, Itime
 #   AWG 2.0  -> amneziawg-go v0.2.19                 + S3/S4, H1-H4 as ranges, tagged I chains
-#   AWG 3.0  -> amneziawg-go v3.0.2                  + HeaderProtectionKey, ContentPaddingAddition, timer ranges
-#   AWG 3.1  -> amneziawg-go v3.1.20260814           + RandomTrailers, DisableCookies (UAPI: random_trailers/disable_cookies)
+#   AWG 3.0  -> amneziawg-go v3.0.20260805           + HeaderProtectionKey, ContentPaddingAddition, timer ranges
+#   AWG 3.1  -> amneziawg-go v3.1.20260828           + RandomTrailers, DisableCookies (UAPI: random_trailers/disable_cookies)
 #
 # Tags verified against `git ls-remote` and the `case "..."` list in
 # device/uapi.go at each tag; see containers/README.md.
-ARG AWG_GO_VERSION=v3.0.2
-ARG AWG_TOOLS_VERSION=v1.0.20260618-2
+ARG AWG_GO_VERSION=v3.0.20260805
+ARG AWG_TOOLS_VERSION=v3.1.20260812
 
-# 1.25 is the floor: amneziawg-go v3.0.2's go.mod still says `go 1.25.0`, and
-# the Makefile builds with GOTOOLCHAIN=local, so a 1.24 image fails outright.
+# 1.25 is the floor: the v3.0.x go.mod still says `go 1.25.0`, and the Makefile
+# builds with GOTOOLCHAIN=local, so a 1.24 image fails outright.
 # 1.26 is what is actually used — it satisfies the floor and also builds the
 # older tags, whose go.mod ask for 1.22/1.24.
 FROM golang:1.26-alpine AS build
@@ -32,8 +30,10 @@ RUN git clone --depth 1 --branch ${AWG_GO_VERSION} https://github.com/amnezia-vp
  && make \
  && install -m 0755 amneziawg-go /out-awg-go
 
-# awg is carried only for key material (curve25519 + psk), which no AWG
-# generation changed. It is deliberately NOT used to bring the interface up.
+# awg is carried for two things: key material (curve25519 + psk), which no AWG
+# generation changed, and `awg showconf`/`awg show` for anyone debugging a node
+# by hand. It is deliberately NOT used to bring the interface up — the
+# entrypoint does that over UAPI so the same path serves every generation.
 FROM alpine:3.24 AS tools
 ARG AWG_TOOLS_VERSION
 RUN apk add --no-cache git make gcc musl-dev linux-headers bash
@@ -88,7 +88,9 @@ COPY awg-peer      /usr/bin/awg-peer
 COPY awg-log.sh    /usr/lib/awg/log.sh
 COPY awg-health    /usr/bin/awg-health
 COPY awg-dump.sh   /usr/bin/awg-dump
-RUN chmod +x /usr/bin/entrypoint.sh /usr/bin/awg-uapi /usr/bin/awg-peer /usr/bin/awg-health /usr/bin/awg-dump
+COPY awg-under     /usr/bin/awg-under
+COPY awg-leak      /usr/bin/awg-leak
+RUN chmod +x /usr/bin/entrypoint.sh /usr/bin/awg-uapi /usr/bin/awg-peer /usr/bin/awg-health /usr/bin/awg-dump /usr/bin/awg-under /usr/bin/awg-leak
 ENV AWG_IFACE=awg0
 # So the event log can say which generation is running without the operator
 # having to map an image name back to a protocol.

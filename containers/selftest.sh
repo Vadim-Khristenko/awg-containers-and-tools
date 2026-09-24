@@ -144,10 +144,27 @@ check $rc "awg-dump carries no private key"
 if printf '%s' "$dump" | grep -qF -- "$psk"; then rc=1; else rc=0; fi
 check $rc "awg-dump carries no preshared key"
 # By now more than one 30s health interval has passed since start; the
-# orchestrator-visible status should agree with what awg-health just said.
-status=$(docker inspect -f '{{.State.Health.Status}}' "$SRV" 2>/dev/null || echo unknown)
+# orchestrator-visible status should agree with what awg-health just said. The
+# first probe lands inside the 20s start period, where docker records no
+# verdict, so this waits for one instead of demanding it immediately.
+status=""
+for _ in $(seq 1 24); do
+    status=$(docker inspect -f '{{.State.Health.Status}}' "$SRV" 2>/dev/null || echo unknown)
+    [ "$status" = healthy ] && break
+    sleep 5
+done
 echo "docker health status: $status"
-[ "$status" = "healthy" ]; check $? "docker reports the server container healthy"
+[ "$status" = healthy ]; check $? "docker reports the server container healthy"
+if [ "$status" != healthy ]; then
+    echo "--- what the check itself said ---"
+    docker inspect -f '{{range .State.Health.Log}}{{.ExitCode}}: {{.Output}}{{end}}' "$SRV" 2>&1 | tail -5
+fi
+
+# A check that always says yes is worth nothing, so this proves it can say no:
+# take the client's interface away and it must notice.
+docker exec "$CLI" ip link del "${AWG_IFACE:-awg0}" >/dev/null 2>&1
+docker exec "$CLI" awg-health >/dev/null 2>&1; rc=$?
+[ "$rc" != 0 ]; check $? "awg-health notices a node that lost its interface"
 
 hr "RESULT"
 if [ "$FAIL" = 0 ]; then echo "AWG $V: all checks passed"; else echo "AWG $V: FAILURES above"; fi

@@ -20,6 +20,8 @@ jobs:
       - name: Make sure the tun device exists
         run: |
           sudo modprobe tun || true
+          # utiltest.sh builds a fake tunnel out of a dummy interface.
+          sudo modprobe dummy || true
           test -c /dev/net/tun
 
       # Belt and braces. The `scripts` job in CI fails when a script is
@@ -27,7 +29,7 @@ jobs:
       # properly — but a run that is about to spend forty minutes on live
       # tunnels should not die on chmod.
       - name: Make sure the scripts are runnable
-        run: chmod +x containers/*.sh containers/awg-peer containers/awg-uapi
+        run: chmod +x containers/*.sh containers/awg-peer containers/awg-uapi containers/awg-health containers/awg-under containers/awg-leak
 
       # The self test drives the tunnel through awg-tool, and the binary has
       # to exist before the first tunnel comes up. This was the quiet killer
@@ -44,6 +46,11 @@ jobs:
       # checksums, per generation. "It started" is not the same as "it works".
       - name: Self test
         run: cd containers && sudo ./selftest.sh
+
+      # The checks inside the images, on their own: a dummy interface and a
+      # page, so this takes seconds and still proves they can say no.
+      - name: The node utilities
+        run: cd containers && sudo ./utiltest.sh
 
       - name: All five at once
         run: cd containers && sudo ./paralleltest.sh

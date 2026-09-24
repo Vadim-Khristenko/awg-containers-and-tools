@@ -69,6 +69,19 @@ jobs:
       - run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2
 
+      - name: Set up Perl on Windows
+        if: matrix.os == 'windows-latest'
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.38'
+          distribution: strawberry
+
+      - name: Configure OpenSSL Vendor Build
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          echo "OPENSSL_NO_VENDOR=0" >> $GITHUB_ENV
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} --bin awg-tool
 
@@ -77,12 +90,13 @@ jobs:
         run: |
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/awg-tool${{ matrix.ext }}" \
-             "dist/awg-tool-${{ matrix.target }}${{ matrix.ext }}"
+            "dist/awg-tool-${{ matrix.target }}${{ matrix.ext }}"
 
       - uses: actions/upload-artifact@v7
         with:
           name: awg-tool-${{ matrix.target }}
           path: dist/*
+
 
   publish-images:
     name: Publish ${{ matrix.image }}
@@ -96,8 +110,8 @@ jobs:
           - { image: amnezia-wg-1,   awg: "1.0", go: v0.2.12, file: Dockerfile }
           - { image: amnezia-wg-15,  awg: "1.5", go: v0.2.14-beta-awg-1.5-1, file: Dockerfile }
           - { image: amnezia-wg-2,   awg: "2.0", go: v0.2.19, file: Dockerfile }
-          - { image: amnezia-wg-3,   awg: "3.0", go: v3.0.2,  file: Dockerfile }
-          - { image: amnezia-wg-31,  awg: "3.1", go: v3.1.20260814, file: Dockerfile }
+          - { image: amnezia-wg-3,   awg: "3.0", go: v3.0.20260805,  file: Dockerfile }
+          - { image: amnezia-wg-31,  awg: "3.1", go: v3.1.20260828, file: Dockerfile }
           - { image: amnezia-wg-dns, awg: "dns", go: "-",     file: Dockerfile.dns }
           - { image: amnezia-wg-status, awg: "status", go: "-", file: Dockerfile.status }
     steps:
