@@ -25,17 +25,19 @@
 use crate::awg3::{
     self, Awg3Options, Awg3Params, Intensity, MIN_S_WITH_HEADER_PROTECTION, UintRange,
 };
-use crate::deploy::config::{BaseObfuscation, MAX_S4};
+use crate::deploy::config::{
+    BaseObfuscation, MAX_S4, MESSAGE_COOKIE_SIZE, MESSAGE_INITIATION_SIZE, MESSAGE_RESPONSE_SIZE,
+};
 use crate::mimic::{self, Chain, MimicOptions, MimicProfile, Tag, TagKind};
 use crate::render::{awg3_conf_lines, awg3_uapi_lines};
 use crate::rng::Rng;
 use crate::{Error, Result};
 
-/// `MessageInitiationSize - MessageResponseSize`. Two S values this far apart
-/// make an initiation and a response the same size on the wire.
-const INIT_RESPONSE_DELTA: u32 = 56;
-/// `MessageResponseSize` — the same collision, one message type over.
-const RESPONSE_COOKIE_DELTA: u32 = 92;
+/// Padding draw bounds (Architect `strategy.ts`, `index.ts`).
+pub const S_MAX: u32 = 150;
+pub const ROUTER_S_MAX: u32 = 20;
+pub const S3_MAX: u32 = 64;
+pub const S3_MAX_EXTREME: u32 = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AwgVersion {
@@ -538,8 +540,8 @@ impl VersionedParams {
 
     /// The same set as UAPI `key=value` lines.
     ///
-    /// This is the path that matters for 3.0: `amneziawg-tools` parses only the
-    /// 2.0 keys, so `awg-quick` cannot bring a 3.0 interface up at all.
+    /// This is the path the containers use: one request format covers 1.0
+    /// through 3.1, so the keys reach the daemon however the tools parse them.
     pub fn uapi_lines(&self) -> Vec<String> {
         let mut out = Vec::new();
         for i in 0..4 {
@@ -565,6 +567,8 @@ impl VersionedParams {
 
     /// The `.conf` keys actually emitted, in order. Used to check a version
     /// carries its own field set and nothing else.
+    /// The `.conf` keys actually emitted, in order. Used to check a version
+    /// carries its own field set and nothing else.
     pub fn field_names(&self) -> Vec<String> {
         self.conf_lines()
             .iter()
@@ -573,9 +577,142 @@ impl VersionedParams {
     }
 }
 
+/// Junk bounds by intensity (Architect's JMIN/JMAX_BY_INTENSITY and router bands).
+const JMIN_LOW: (u32, u32) = (64, 256);
+const JMIN_MEDIUM: (u32, u32) = (128, 512);
+const JMIN_HIGH: (u32, u32) = (256, 768);
+const JMAX_LOW: (u32, u32) = (256, 512);
+const JMAX_MEDIUM: (u32, u32) = (512, 1024);
+const JMAX_HIGH: (u32, u32) = (768, 1280);
+const JUNK_ROUTER_JMIN: (u32, u32) = (16, 31);
+const JUNK_ROUTER_JMAX: (u32, u32) = (96, 128);
+
+/// Widest window a header range opens (Architect's `rRange`, `RANGE_MAX_WIDTH`).
+const RANGE_MAX_WIDTH: u32 = 50_000;
+const RANGE_MIN_WIDTH: u32 = 1_000;
+
+/// `MessageInitiationSize - MessageResponseSize`. Two S values this far apart
+/// make an initiation and a response the same size on the wire.
+const INIT_RESPONSE_DELTA: u32 = MESSAGE_INITIATION_SIZE - MESSAGE_RESPONSE_SIZE;
+/// `MessageInitiationSize - MessageCookieSize`.
+const INIT_COOKIE_DELTA: u32 = MESSAGE_INITIATION_SIZE - MESSAGE_COOKIE_SIZE;
+/// `MessageResponseSize - MessageCookieSize`.
+const RESPONSE_COOKIE_DELTA: u32 = MESSAGE_RESPONSE_SIZE - MESSAGE_COOKIE_SIZE;
+
+/// Everything both ends of one tunnel have to agree on, and roughly how hard
+/// each knob is pressed.
+///
+/// `junk_level`, `extreme` and `narrow_h` mirror the Architect knobs of the
+/// same names; the `client_*` fields are the target build's ceilings.
+pub struct BaseCtx<'a> {
+    pub version: AwgVersion,
+    pub intensity: Intensity,
+    pub router_mode: bool,
+    pub extreme: bool,
+    pub junk_level: u8,
+    pub narrow_h: bool,
+    pub client_max_h: u32,
+    pub client_max_jc: u32,
+    pub client_max_s4: u32,
+    pub header_protection: bool,
+    pub phantom: std::marker::PhantomData<&'a ()>,
+}
+
+/// One of four ordered non-overlapping header windows.
+struct Zone {
+    min: u32,
+    max: u32,
+    spread: u32,
+}
+
+/// H1–H4 zones for one client ceiling and mode, ordered by message type.
+fn header_zones(max_h: u32, extreme: bool, narrow_h: bool) -> [Zone; 4] {
+    const NARROW_SPREAD: u32 = 20_000;
+    const NARROW_H4_SPREAD: u32 = 30_000;
+
+    if max_h == u32::MAX {
+        let wide = if narrow_h {
+            NARROW_SPREAD
+        } else if extreme {
+            10_000_000
+        } else {
+            100_000_000
+        };
+        let wide_h4 = if narrow_h {
+            NARROW_H4_SPREAD
+        } else if extreme {
+            15_000_000
+        } else {
+            150_000_000
+        };
+        return [
+            Zone {
+                min: 100_000_000,
+                max: 900_000_000,
+                spread: wide,
+            },
+            Zone {
+                min: 1_200_000_000,
+                max: 2_000_000_000,
+                spread: wide,
+            },
+            Zone {
+                min: 2_400_000_000,
+                max: 3_200_000_000,
+                spread: wide,
+            },
+            Zone {
+                min: 3_600_000_000,
+                max: 4_000_000_000,
+                spread: wide_h4,
+            },
+        ];
+    }
+
+    let zone = max_h / 5;
+    let gap = 10_000u32;
+    let room = zone.saturating_sub(gap);
+    let wide = if narrow_h {
+        NARROW_SPREAD
+    } else if extreme {
+        10_000_000
+    } else {
+        100_000_000
+    };
+    let wide_h4 = if narrow_h {
+        NARROW_H4_SPREAD
+    } else if extreme {
+        15_000_000
+    } else {
+        150_000_000
+    };
+    [
+        Zone {
+            min: zone,
+            max: zone.saturating_mul(2).saturating_sub(gap),
+            spread: wide.min(room),
+        },
+        Zone {
+            min: zone.saturating_mul(2),
+            max: zone.saturating_mul(3).saturating_sub(gap),
+            spread: wide.min(room),
+        },
+        Zone {
+            min: zone.saturating_mul(3),
+            max: zone.saturating_mul(4).saturating_sub(gap),
+            spread: wide.min(room),
+        },
+        Zone {
+            min: zone.saturating_mul(4),
+            max: max_h,
+            spread: wide_h4.min(room),
+        },
+    ]
+}
+
 // -------------------------------------------------------------- generation
 
-/// What the caller wants generated.
+/// What a caller wants generated.
 #[derive(Debug, Clone)]
 pub struct GenOptions {
     pub version: AwgVersion,
@@ -596,6 +733,13 @@ pub struct GenOptions {
     pub disable_cookies: bool,
     /// Low-power router: fewer junk packets, smaller padding, I1 only.
     pub router_mode: bool,
+    /// Push ceilings instead of expectations: Jc to 128, S3 past 64, headers
+    /// across 10M windows.
+    pub extreme: bool,
+    /// How much junk goes out before the handshake; 5 is the Architect default.
+    pub junk_level: u8,
+    /// 3.1 only: narrow H ranges to ~20k as a CPU workaround. Ignored elsewhere.
+    pub narrow_h: bool,
 }
 
 impl Default for GenOptions {
@@ -612,33 +756,201 @@ impl Default for GenOptions {
             random_trailers: false,
             disable_cookies: false,
             router_mode: false,
+            extreme: false,
+            junk_level: 5,
+            narrow_h: false,
         }
     }
 }
 
-/// Widen four distinct magic headers into four non-overlapping ranges.
+/// A header range inside its own zone, Architect's `rRange` with the zone's
+/// ceiling slid rather than clamped.
 ///
-/// Overlapping ranges are the one way to write H values that the daemon accepts
-/// and that then break: it demultiplexes on the header number alone, so a packet
-/// landing in the overlap belongs to two message types at once. Sorting first
-/// and stopping each range one short of the next start makes overlap impossible
-/// rather than unlikely.
-fn header_ranges(rng: &mut impl Rng, lo: [u32; 4], max_h: u32) -> [u32; 4] {
-    let mut order = [0usize, 1, 2, 3];
-    order.sort_by_key(|i| lo[*i]);
-
-    let mut hi = [0u32; 4];
-    for (pos, &i) in order.iter().enumerate() {
-        let start = lo[i];
-        let ceiling = match order.get(pos + 1) {
-            Some(&next) => lo[next].saturating_sub(1),
-            None => max_h,
-        };
-        // The width upstream draws for a header range.
-        let width = rng.range(1_000, 50_000);
-        hi[i] = start.saturating_add(width).min(ceiling).max(start);
+/// `base` is the single header drawn first for the same zone: the range opens
+/// *inside* it (`rnd(base, base + spread)`), which is the whole point of the
+/// room reservation. A collapsed edge is its own fallback rather than an
+/// error: `UintRange::new` reads `(30, 4)` as a single value, which is also
+/// what the parser accepts.
+fn header_window(
+    rng: &mut impl Rng,
+    base: u32,
+    zone: &Zone,
+    max_h: u32,
+    narrow: bool,
+) -> UintRange {
+    let limit = zone.max.min(max_h);
+    if narrow {
+        // `rRange(base, narrowSpread)`: `start = rnd(base, base + spread)`,
+        // `end = start + rnd(RANGE_MIN_WIDTH, spread)` — the width is bounded
+        // by the *spread*, never by the zone.
+        let spread = zone.spread;
+        let start = base.saturating_add(rng.range(0, spread)).min(limit);
+        let end = start
+            .saturating_add(rng.range(RANGE_MIN_WIDTH, spread.max(1)))
+            .min(limit);
+        return UintRange::new(start.min(end), end.max(start.min(limit)));
     }
-    hi
+    let width = rng.range(RANGE_MIN_WIDTH, RANGE_MAX_WIDTH);
+    // Slide the window down rather than clamping both ends onto the ceiling:
+    // `rRange` never parks every capped-client range on the cap itself.
+    let mut start = base.saturating_add(rng.range(0, zone.spread)).min(limit);
+    start = start.min(limit.saturating_sub(width));
+    let end = start.saturating_add(width).min(limit);
+    UintRange::new(start.min(end), end.max(start.min(limit)))
+}
+
+/// A single header for 1.0/1.5, out of the same zones as the ranges.
+fn draw_header_single(
+    rng: &mut impl Rng,
+    zones: &[Zone; 4],
+    i: usize,
+    extreme: bool,
+    max_h: u32,
+) -> u32 {
+    let spread = if i == 0 {
+        if extreme { 10_000_000 } else { 4_000_000 }
+    } else {
+        zones[i].spread
+    };
+    zones[i]
+        .min
+        .saturating_add(rng.range(0, spread))
+        .min(max_h)
+        .max(5)
+}
+
+/// How many junk packets go out before the handshake.
+///
+/// Architect's `drawJc` exactly: the version-1.0 branch is the plain level,
+/// every other version drifts `junkLevel` by ±1 inside the ceiling, and level
+/// 0 is the off switch — unless `extreme` re-arms a small draw. `router_mode`
+/// is a cap applied afterwards, and it never re-arms zero.
+fn draw_junk(rng: &mut impl Rng, ctx: &BaseCtx<'_>) -> (u32, u32, u32) {
+    let ceiling = ctx.client_max_jc.min(if ctx.extreme { 128 } else { 15 });
+    let extreme_ceiling = ctx.client_max_jc.min(128);
+    let mut jc = if ctx.version == AwgVersion::V1_0 {
+        u32::from(ctx.junk_level.max(4)).min(ceiling)
+    } else if ctx.junk_level > 0 {
+        let drift = rng.range(0, 2) as i64 - 1;
+        ((i64::from(ctx.junk_level) + drift)
+            .max(1)
+            .min(i64::from(ceiling.max(1)))) as u32
+    } else if ctx.extreme {
+        rng.range(1, 8.min(extreme_ceiling.max(1)))
+    } else {
+        0
+    };
+    if ctx.router_mode {
+        // A cap, applied to whatever was drawn. Zero stays zero: a user who
+        // turned the junk train off asked for it off, and router mode used to
+        // hand them three packets anyway.
+        let cap = ctx.client_max_jc.min(if ctx.version == AwgVersion::V1_0 {
+            4
+        } else {
+            3
+        });
+        jc = if jc == 0 { 0 } else { jc.min(cap.max(1)) };
+    }
+
+    let (jmin_lo, jmin_hi) = if ctx.router_mode {
+        JUNK_ROUTER_JMIN
+    } else {
+        match ctx.intensity {
+            Intensity::Low => JMIN_LOW,
+            Intensity::Medium => JMIN_MEDIUM,
+            Intensity::High => JMIN_HIGH,
+        }
+    };
+    let (jmax_lo, jmax_hi) = if ctx.router_mode {
+        JUNK_ROUTER_JMAX
+    } else {
+        match ctx.intensity {
+            Intensity::Low => JMAX_LOW,
+            Intensity::Medium => JMAX_MEDIUM,
+            Intensity::High => JMAX_HIGH,
+        }
+    };
+    let jmax_lo_jmax_hi = rng.range(jmax_lo, jmax_hi);
+    let jmin = rng.range(jmin_lo, jmin_hi);
+    let jmax = resolve_jmax(rng, jmin, jmax_lo_jmax_hi, ctx.version);
+    (jc, jmin, jmax)
+}
+
+/// `Jmax` with room for `Jmin` underneath, and the 1.0 floor above 81.
+fn resolve_jmax(rng: &mut impl Rng, jmin: u32, drawn: u32, version: AwgVersion) -> u32 {
+    let mut jmax = if drawn <= jmin.saturating_add(64) {
+        jmin.saturating_add(rng.range(64, 256))
+    } else {
+        drawn
+    };
+    if version == AwgVersion::V1_0 && jmax <= 81 {
+        jmax = 82 + rng.range(50, 200);
+    }
+    jmax
+}
+
+/// Padding sizes, after the rules that involve more than one of them.
+fn draw_sizes(rng: &mut impl Rng, ctx: &BaseCtx<'_>) -> [u32; 4] {
+    let s_max = if ctx.router_mode { ROUTER_S_MAX } else { S_MAX };
+    let s3_max = if ctx.extreme { S3_MAX_EXTREME } else { S3_MAX };
+    let max_s4 = MAX_S4.min(ctx.client_max_s4);
+
+    let mut s1 = rng.range(1, s_max);
+    let mut s2 = rng.range(1, s_max);
+    let mut s3 = if ctx.extreme {
+        rng.range(S3_MAX + 1, S3_MAX_EXTREME)
+    } else {
+        rng.range(1, S3_MAX)
+    };
+    let mut s4 = rng.range(1, max_s4.max(1));
+
+    s2 = avoid_collision(s2, s_max, |v| v == s1 + INIT_RESPONSE_DELTA);
+    s3 = avoid_collision(s3, s3_max, |v| {
+        v == s1 + INIT_COOKIE_DELTA || v == s2 + RESPONSE_COOKIE_DELTA
+    });
+    s4 = s4.min(max_s4);
+
+    if ctx.header_protection {
+        s1 = lift_above_floor(rng, s1, MIN_S_WITH_HEADER_PROTECTION, s_max);
+        s2 = lift_above_floor(rng, s2, MIN_S_WITH_HEADER_PROTECTION, s_max);
+        s2 = avoid_collision(s2, s_max, |v| v == s1 + INIT_RESPONSE_DELTA);
+        s3 = lift_above_floor(rng, s3, MIN_S_WITH_HEADER_PROTECTION, s3_max);
+        s4 = lift_above_floor(rng, s4, MIN_S_WITH_HEADER_PROTECTION, max_s4);
+        s3 = avoid_collision(s3, s3_max, |v| {
+            v == s1 + INIT_COOKIE_DELTA || v == s2 + RESPONSE_COOKIE_DELTA
+        });
+        s4 = s4.min(max_s4);
+    }
+
+    [s1, s2, s3, s4]
+}
+
+/// Step a size off a colliding length without leaving its range.
+fn avoid_collision(value: u32, ceiling: u32, collides: impl Fn(u32) -> bool) -> u32 {
+    if !collides(value) {
+        return value;
+    }
+    let step: i64 = if value >= ceiling { -1 } else { 1 };
+    let mut v = value as i64 + step;
+    for _ in 0..10u8 {
+        if v < 1 || v > i64::from(ceiling) || !collides(v as u32) {
+            break;
+        }
+        v += step;
+    }
+    v.clamp(1, i64::from(ceiling.max(1))) as u32
+}
+
+/// Bring a size up to the floor without collapsing onto it.
+fn lift_above_floor(rng: &mut impl Rng, value: u32, floor: u32, high: u32) -> u32 {
+    if value >= floor {
+        return value;
+    }
+    if high > floor {
+        rng.range(floor, high)
+    } else {
+        floor
+    }
 }
 
 /// Generate a complete parameter set for one version and one client.
@@ -650,55 +962,50 @@ pub fn generate(rng: &mut impl Rng, opts: &GenOptions) -> Result<VersionedParams
     let client = opts.client;
     let header_protection = opts.header_protection && opts.version.supports_awg3();
 
-    let mut base = BaseObfuscation::generate(rng, header_protection);
-
-    // Client ceilings, applied to the shared generator's output rather than by
-    // giving this module its own copy of the junk parameters.
-    base.jc = base.jc.min(client.max_jc);
-    base.s[3] = base.s[3].min(client.max_s4);
-    if header_protection {
-        base.s[3] = awg3::clamp_s_for_header_protection(base.s[3], true);
+    let ctx = BaseCtx {
+        version: opts.version,
+        intensity: opts.intensity,
+        router_mode: opts.router_mode,
+        extreme: opts.extreme,
+        junk_level: opts.junk_level,
+        narrow_h: opts.narrow_h && opts.version == AwgVersion::V3_1,
+        client_max_h: client.max_h_value,
+        client_max_jc: client.max_jc,
+        client_max_s4: client.max_s4,
+        header_protection,
+        phantom: std::marker::PhantomData,
+    };
+    let (jc, jmin, jmax) = draw_junk(rng, &ctx);
+    let mut s = draw_sizes(rng, &ctx);
+    let zones = header_zones(ctx.client_max_h, ctx.extreme, ctx.narrow_h);
+    let mut h = [0u32; 4];
+    for (i, v) in h.iter_mut().enumerate() {
+        *v = draw_header_single(rng, &zones, i, ctx.extreme, ctx.client_max_h);
+    }
+    if !opts.version.supports_s3_s4() {
+        s[2] = 0;
+        s[3] = 0;
     }
 
-    if opts.version == AwgVersion::V1_0 {
-        // Upstream floors Jc at 4 for 1.0 and refuses a Jmax at or below 81.
-        // Neither is explained in the source; both are reproduced because a
-        // config that trips them is a config the 1.0 clients reject.
-        base.jc = base.jc.max(4).min(client.max_jc);
-        if base.jmax <= 81 {
-            base.jmax = 82 + rng.range(50, 200);
-        }
-    }
-
-    if opts.router_mode {
-        // A router that spends its CPU on junk has none left for the tunnel.
-        base.s[0] = base.s[0].min(20);
-        base.s[1] = base.s[1].min(20);
-        base.jc = base.jc.min(2).max(if opts.version == AwgVersion::V1_0 {
-            4
-        } else {
-            1
-        });
-        base.jmin = base.jmin.min(40);
-        base.jmax = base.jmax.min(128).max(base.jmin + 1);
-        if header_protection {
-            // The nonce floor outranks router mode: a short S with a header key
-            // does not save power, it weakens the cipher.
-            for s in &mut base.s {
-                *s = awg3::clamp_s_for_header_protection(*s, true);
-            }
-        }
-        // Clamping can recreate the size collision the generator avoided.
-        if base.s[0] + INIT_RESPONSE_DELTA == base.s[1] {
-            base.s[1] += 1;
-        }
-    }
+    let mut base = BaseObfuscation {
+        jc,
+        jmin,
+        jmax: jmax.max(jmin + 1),
+        s,
+        h,
+    };
     base.validate()?;
 
-    let h_hi = opts
-        .version
-        .h_is_range()
-        .then(|| header_ranges(rng, base.h, client.max_h_value));
+    let h_hi = opts.version.h_is_range().then(|| {
+        let mut hi = [0u32; 4];
+        for (i, zone) in zones.iter().enumerate() {
+            // `base.h` doubles as the rendered low end on range versions.
+            let window = header_window(rng, base.h[i], zone, client.max_h_value, ctx.narrow_h);
+            hi[i] = window.hi.max(base.h[i]);
+            base.h[i] = window.lo.min(base.h[i]);
+        }
+        hi
+    });
 
     let chains = if opts.version.supports_cps() && client.supports_i1_i5 {
         // A tag the daemon or the client does not implement is not a smaller
@@ -853,19 +1160,18 @@ pub fn validate_for_client(params: &VersionedParams, client: &ClientCapability) 
         ));
     }
     if v.supports_s3_s4() {
-        if s[2] == s[0] + INIT_RESPONSE_DELTA {
+        if s[2] == s[0] + INIT_COOKIE_DELTA {
             out.push(Violation::warn(
                 "S3",
                 "s.cookie_init_collision",
-                "S3 = S1 + 56 — a cookie reply and an initiation would be the same size"
-                    .to_string(),
+                format!("S3 = S1 + {INIT_COOKIE_DELTA} — a cookie reply and an initiation would be the same size"),
             ));
         }
         if s[2] == s[1] + RESPONSE_COOKIE_DELTA {
             out.push(Violation::warn(
                 "S3",
                 "s.cookie_response_collision",
-                "S3 = S2 + 92 — a cookie reply and a response would be the same size".to_string(),
+                format!("S3 = S2 + {RESPONSE_COOKIE_DELTA} — a cookie reply and a response would be the same size"),
             ));
         }
         if s[3] > MAX_S4 {
@@ -1035,6 +1341,22 @@ pub fn validate_for_client(params: &VersionedParams, client: &ClientCapability) 
                 format!("3.0 parameters are set but the config version is {v}"),
             ));
         }
+        if !v.supports_feature_flags() && (p.random_trailers || p.disable_cookies) {
+            out.push(Violation::warn(
+                "RandomTrailers",
+                "awg3.flags_version_mismatch",
+                format!(
+                    "3.1 switches are set but the config version is {v} — a 3.0 device refuses these keys"
+                ),
+            ));
+        }
+        if p.disable_cookies {
+            out.push(Violation::warn(
+                "DisableCookies",
+                "awg3.cookies_off",
+                "DisableCookies also switches the junk train off and breaks NAT keepalive under load".to_string(),
+            ));
+        }
         if let Err(e) = p.validate() {
             out.push(Violation::err("AWG3", "awg3.timers", e.to_string()));
         }
@@ -1137,8 +1459,8 @@ mod tests {
         // UAPI in the daemon's own spelling.
         let p = make(AwgVersion::V3_1, 7);
         let conf = p.conf_lines().join("\n");
-        assert!(conf.contains("RandomTrailers = true"), "{conf}");
-        assert!(conf.contains("DisableCookies = true"), "{conf}");
+        assert!(conf.contains("RandomTrailers = 1"), "{conf}");
+        assert!(conf.contains("DisableCookies = 1"), "{conf}");
         let uapi = p.uapi_lines().join("\n");
         assert!(uapi.contains("random_trailers=1"), "{uapi}");
         assert!(uapi.contains("disable_cookies=1"), "{uapi}");
@@ -1263,9 +1585,16 @@ mod tests {
     #[test]
     fn the_windows_int32_cap_is_reported_with_the_field_named() {
         // Issue #85: the Windows client parses H into a signed 32-bit integer.
+        // Every other header is pinned below the cap: generation targets the
+        // default client's UINT32_MAX ceiling, so seed 7 may carry a second
+        // header past INT32_MAX and the test would name two fields, not one.
         let mut p = make(AwgVersion::V2_0, 7);
-        p.base.h[2] = 3_000_000_000;
-        p.h_hi.as_mut().unwrap()[2] = 3_000_100_000;
+        p.base.h = [100, 200, 3_000_000_000, 400];
+        let hi = p.h_hi.as_mut().unwrap();
+        hi[0] = 150;
+        hi[1] = 250;
+        hi[2] = 3_000_100_000;
+        hi[3] = 450;
 
         let win = client("amneziawg-windows").unwrap();
         let found: Vec<_> = validate_for_client(&p, win)
@@ -1626,6 +1955,136 @@ mod tests {
     }
 
     #[test]
+    fn generated_timers_and_sizes_hold_across_modes() {
+        use crate::awg3::Intensity as I;
+        for seed in 0..60u64 {
+            for intensity in [I::Low, I::Medium, I::High] {
+                for (router_mode, extreme) in [(false, false), (true, false), (false, true)] {
+                    for version in AwgVersion::ALL {
+                        let mut rng = SeededRng::new(seed);
+                        let p = generate(
+                            &mut rng,
+                            &GenOptions {
+                                version,
+                                intensity,
+                                router_mode,
+                                extreme,
+                                ..Default::default()
+                            },
+                        )
+                        .expect("generated params must satisfy their own invariants");
+                        let s = p.base.s;
+                        assert_eq!(s[2], if version.supports_s3_s4() { s[2] } else { 0 });
+                        let max_s4 = MAX_S4.min(default_client().max_s4);
+                        assert!(s[3] <= max_s4, "S4 exceeds the cap");
+                        if version.supports_s3_s4() {
+                            assert_ne!(
+                                s[1],
+                                s[0] + INIT_RESPONSE_DELTA,
+                                "seed {seed}: S collision"
+                            );
+                            assert_ne!(s[2], s[0] + INIT_COOKIE_DELTA, "seed {seed}: S collision");
+                            assert_ne!(
+                                s[2],
+                                s[1] + RESPONSE_COOKIE_DELTA,
+                                "seed {seed}: S collision"
+                            );
+                            assert!(p.base.jmin <= p.base.jmax, "seed {seed}: junk inverted");
+                        }
+                        if p.awg3
+                            .as_ref()
+                            .is_some_and(|p| p.header_protection_key.is_some())
+                        {
+                            for (i, v) in s.iter().enumerate() {
+                                assert!(
+                                    *v >= MIN_S_WITH_HEADER_PROTECTION,
+                                    "seed {seed}: S{} below the nonce floor",
+                                    i + 1
+                                );
+                            }
+                        }
+                        if version.h_is_range() {
+                            let ranges: [UintRange; 4] =
+                                [p.h_range(0), p.h_range(1), p.h_range(2), p.h_range(3)];
+                            for r in &ranges {
+                                assert!(r.hi <= default_client().max_h_value);
+                            }
+                            for i in 0..4 {
+                                for j in (i + 1)..4 {
+                                    assert!(
+                                        ranges[i].hi < ranges[j].lo || ranges[j].hi < ranges[i].lo,
+                                        "seed {seed}: H{} and H{} overlap",
+                                        i + 1,
+                                        j + 1
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn router_junk_is_drawn_not_constant() {
+        use std::collections::BTreeSet;
+        let mut triples = BTreeSet::new();
+        for seed in 0..200u64 {
+            let p = generate(
+                &mut SeededRng::new(seed),
+                &GenOptions {
+                    router_mode: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            triples.insert((p.base.jc, p.base.jmin, p.base.jmax));
+        }
+        assert!(
+            triples.len() > 10,
+            "every router config carries the same junk train"
+        );
+    }
+
+    #[test]
+    fn narrow_h_stays_inside_small_windows_on_3_1() {
+        for seed in 0..50u64 {
+            let p = generate(
+                &mut SeededRng::new(seed),
+                &GenOptions {
+                    version: AwgVersion::V3_1,
+                    narrow_h: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            for i in 0..4 {
+                let r = p.h_range(i);
+                assert!(r.hi - r.lo <= 80_000, "H{} too wide: {r}", i + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_h_is_ignored_off_3_1() {
+        let p = generate(
+            &mut SeededRng::new(9),
+            &GenOptions {
+                version: AwgVersion::V3_0,
+                narrow_h: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !(0..4).all(|i| p.h_range(i).hi - p.h_range(i).lo <= 80_000)
+                || p.h_range(0).lo >= 100_000_000 - 1,
+            "narrow_h must not narrow 3.0 headers"
+        );
+    }
+
+    #[test]
     fn the_same_seed_gives_the_same_config() {
         for v in AwgVersion::ALL {
             let a = make(v, 777);
@@ -1682,6 +2141,10 @@ mod tests {
 
     #[test]
     fn router_mode_keeps_the_junk_small() {
+        // Architect's `routerMode` is a cap on top of the normal draw, and the
+        // normal draw starts from `junk_level` (default 5): 5±1 capped at 3 is
+        // 3, not 2. The test pins the wire promise — the train stays short —
+        // rather than the intermediate draw.
         for v in AwgVersion::ALL {
             for seed in 0..100u64 {
                 let p = generate(
@@ -1696,7 +2159,7 @@ mod tests {
                 assert!(p.base.jmax <= 128, "{v} seed {seed}: Jmax {}", p.base.jmax);
                 assert!(p.base.jmin <= 40);
                 if v != AwgVersion::V1_0 {
-                    assert!(p.base.jc <= 2, "{v} seed {seed}: Jc {}", p.base.jc);
+                    assert!(p.base.jc <= 3, "{v} seed {seed}: Jc {}", p.base.jc);
                 }
                 if let Some(chains) = &p.chains {
                     assert!(chains[1..].iter().all(|c| c.is_empty()));

@@ -3,10 +3,10 @@
 //! * `.conf`  — what humans and clients read. Keys are base64.
 //! * UAPI     — what `amneziawg-go` accepts on its socket. Keys are hex.
 //!
-//! The UAPI path exists because `amneziawg-tools` — on tags *and* on master —
-//! parses only the 2.0 keys, so `awg-quick` physically cannot bring up a 3.0
-//! interface. Talking to the daemon directly sidesteps the tooling lag and
-//! keeps one code path for every protocol version.
+//! The UAPI path exists so one code path serves every generation: the keys
+//! reach the daemon as it parses them, whatever version of amneziawg-tools
+//! happens to be installed. The tools lagged behind 3.0 for a long time, which
+//! is where this came from.
 
 use crate::awg3::Awg3Params;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
@@ -41,12 +41,13 @@ pub fn awg3_conf_lines(p: &Awg3Params) -> Vec<String> {
         }
     }
     // The 3.1 switches, written only when on: a 3.0 device refuses both keys
-    // at config parse, and an off switch says nothing worth a line.
+    // at config parse, and an off switch says nothing worth a line. Values
+    // follow Architect's `render.ts`: `1`, not `true`.
     if p.random_trailers {
-        out.push("RandomTrailers = true".into());
+        out.push("RandomTrailers = 1".into());
     }
     if p.disable_cookies {
-        out.push("DisableCookies = true".into());
+        out.push("DisableCookies = 1".into());
     }
     out
 }

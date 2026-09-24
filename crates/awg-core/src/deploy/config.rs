@@ -21,10 +21,12 @@ use crate::{Error, Result};
 /// key file that never leaves it.
 pub const SERVER_KEY_PLACEHOLDER: &str = "__SERVER_PRIVATE_KEY__";
 
-/// `MessageInitiationSize` and `MessageResponseSize` — `device/noise-protocol.go`.
-/// They appear here only because of the S1/S2 collision rule below.
-const MESSAGE_INITIATION_SIZE: u32 = 148;
-const MESSAGE_RESPONSE_SIZE: u32 = 92;
+/// `MessageInitiationSize`, `MessageResponseSize` and `MessageCookieSize` —
+/// `device/noise-protocol.go`. They appear here only as the size differences
+/// the S collision rules are stated in, mirroring Architect's `messageSizes`.
+pub const MESSAGE_INITIATION_SIZE: u32 = 148;
+pub const MESSAGE_RESPONSE_SIZE: u32 = 92;
+pub const MESSAGE_COOKIE_SIZE: u32 = 64;
 
 /// S4 pads transport packets, and the protocol caps it at 32 bytes — every
 /// client in `crate::versions::CLIENTS` refuses more, and so does the upstream
