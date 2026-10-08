@@ -562,6 +562,8 @@ pub enum Level {
     Error,
     /// The config works but gives something away.
     Warn,
+    /// Worth knowing, not a problem: a template with fields left to fill in.
+    Info,
 }
 
 /// One concrete complaint about one named field.
@@ -580,13 +582,18 @@ impl std::fmt::Display for Violation {
         let level = match self.level {
             Level::Error => "error",
             Level::Warn => "warning",
+            Level::Info => "note",
         };
         write!(f, "{level}: {}: {}", self.field, self.message)
     }
 }
 
 impl Violation {
-    fn err(field: impl Into<String>, code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn err(
+        field: impl Into<String>,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             field: field.into(),
             level: Level::Error,
@@ -595,10 +602,27 @@ impl Violation {
         }
     }
 
-    fn warn(field: impl Into<String>, code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn warn(
+        field: impl Into<String>,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             field: field.into(),
             level: Level::Warn,
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn info(
+        field: impl Into<String>,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            level: Level::Info,
             code,
             message: message.into(),
         }

@@ -105,6 +105,28 @@ pub fn conf_to_vpn(conf: &str) -> Result<String> {
     encode(&build_vpn_config(conf))
 }
 
+/// The `.conf` inside a link: the AmneziaWG container's `config`, or the one
+/// inside its `last_config` JSON, which is where links the app shares keep it.
+pub fn conf_from_link(link: &str) -> Result<String> {
+    let value = decode(link)?;
+    let containers = value["containers"].as_array().cloned().unwrap_or_default();
+    for c in &containers {
+        let awg = &c["awg"];
+        if let Some(conf) = awg["config"].as_str() {
+            return Ok(conf.to_string());
+        }
+        if let Some(last) = awg["last_config"].as_str()
+            && let Ok(inner) = serde_json::from_str::<Value>(last)
+            && let Some(conf) = inner["config"].as_str()
+        {
+            return Ok(conf.to_string());
+        }
+    }
+    Err(Error::Key(
+        "no AmneziaWG container with a config in the link".into(),
+    ))
+}
+
 pub fn decode(link: &str) -> Result<Value> {
     let body = link.trim().strip_prefix("vpn://").unwrap_or(link.trim());
     let bytes = URL_SAFE_NO_PAD

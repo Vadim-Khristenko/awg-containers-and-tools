@@ -7,6 +7,7 @@
 
 pub mod awg3;
 pub mod chain_budget;
+pub mod check;
 pub mod deploy;
 pub mod engines;
 pub mod mimic;

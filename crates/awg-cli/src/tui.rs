@@ -862,6 +862,7 @@ fn draw_generate(f: &mut ratatui::Frame, app: &App, area: Rect) {
                 let (mark, style) = match v.level {
                     Level::Error => ("✕", theme::error()),
                     Level::Warn => ("!", theme::warn()),
+                    Level::Info => ("i", theme::dim()),
                 };
                 Line::from(vec![
                     Span::styled(format!(" {mark} "), style),
