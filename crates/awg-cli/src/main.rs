@@ -13,11 +13,12 @@ mod theme;
 mod tui;
 
 use awg_core::awg3::Intensity;
+use awg_core::check::{self, CheckOptions};
 use awg_core::engines::Engine;
 use awg_core::mimic::hostdb::{self, HostQuery, Region, Role};
 use awg_core::mimic::{BrowserProfile, MimicOptions, MimicProfile};
 use awg_core::rng::SecureRng;
-use awg_core::versions::{self, AwgVersion, GenOptions, Level};
+use awg_core::versions::{self, AwgVersion, ClientCapability, GenOptions, Level};
 use i18n::{Key as K, Lang, t};
 
 const ARCHITECT_URL: &str = "https://architect.vai-rice.space";
@@ -32,6 +33,7 @@ fn main() {
         Some("clients") => cmd_clients(lang),
         Some("profiles") => cmd_profiles(lang),
         Some("hosts") => cmd_hosts(&args, lang),
+        Some("check") | Some("lint") => cmd_check(&args, lang),
         Some("status") => ops::cmd_status(&args, lang),
         Some("logs") => ops::cmd_logs(&args, lang),
         Some("doctor") | Some("diagnose") => ops::cmd_doctor(&args, lang),
@@ -175,6 +177,7 @@ fn usage(lang: Lang) {
     println!("  awg-tool clients");
     println!("      {}", t(lang, K::CmdClients));
     println!("  awg-tool profiles");
+    println!("  awg-tool check <file|-|vpn://...> [--client X] [--version 3.1] [--json]");
     println!("  awg-tool hosts [--role quic] [--region ru] [--whitelisted ru] [--unknown]");
     println!("      {}", t(lang, K::CmdProfiles));
     println!("  awg-tool status [--server NAME | --host ADDR]");
@@ -276,40 +279,8 @@ pub(crate) fn gen_options(args: &[String], lang: Lang) -> GenOptions {
         },
     };
 
-    let client = match flag_value(args, "--client") {
-        None => versions::default_client(),
-        Some(raw) => match versions::client(&raw) {
-            Some(c) => c,
-            None => {
-                let valid: Vec<&str> = versions::CLIENTS.iter().map(|c| c.id).collect();
-                bail(lang, K::ErrUnknownClient, &raw, &valid);
-            }
-        },
-    };
-    // An older build of that client, when it differs from the current one.
-    let client = match flag_value(args, "--client-release") {
-        None => client,
-        Some(raw) => match versions::client_release(client.id, Some(&raw)) {
-            Some(c) => c,
-            None => {
-                let mut valid = vec!["current"];
-                valid.extend(versions::releases_of(client.id).map(|r| r.id));
-                bail(lang, K::ErrUnknownRelease, &raw, &valid);
-            }
-        },
-    };
-
-    let server_engine = match flag_value(args, "--server-engine") {
-        None => Engine::Go,
-        Some(raw) => match Engine::parse(&raw) {
-            Some(e) => e,
-            None => {
-                let valid: Vec<&str> = Engine::ALL.iter().map(|e| e.id()).collect();
-                bail(lang, K::ErrUnknownEngine, &raw, &valid);
-            }
-        },
-    };
-
+    let client = client_flag(args, lang);
+    let server_engine = engine_flag(args, lang);
     let region = region_flag(args, "--region", lang);
     let whitelisted_in = region_flag(args, "--whitelisted", lang);
 
@@ -631,6 +602,172 @@ fn cmd_hosts(args: &[String], lang: Lang) {
     }
 }
 
+/// `--client`, with `--client-release` applied when given.
+fn client_flag(args: &[String], lang: Lang) -> &'static ClientCapability {
+    let client = match flag_value(args, "--client") {
+        None => versions::default_client(),
+        Some(raw) => match versions::client(&raw) {
+            Some(c) => c,
+            None => {
+                let valid: Vec<&str> = versions::CLIENTS.iter().map(|c| c.id).collect();
+                bail(lang, K::ErrUnknownClient, &raw, &valid);
+            }
+        },
+    };
+    // An older build of that client, when it differs from the current one.
+    match flag_value(args, "--client-release") {
+        None => client,
+        Some(raw) => match versions::client_release(client.id, Some(&raw)) {
+            Some(c) => c,
+            None => {
+                let mut valid = vec!["current"];
+                valid.extend(versions::releases_of(client.id).map(|r| r.id));
+                bail(lang, K::ErrUnknownRelease, &raw, &valid);
+            }
+        },
+    }
+}
+
+/// `--server-engine`, amneziawg-go when absent.
+fn engine_flag(args: &[String], lang: Lang) -> Engine {
+    match flag_value(args, "--server-engine") {
+        None => Engine::Go,
+        Some(raw) => match Engine::parse(&raw) {
+            Some(e) => e,
+            None => {
+                let valid: Vec<&str> = Engine::ALL.iter().map(|e| e.id()).collect();
+                bail(lang, K::ErrUnknownEngine, &raw, &valid);
+            }
+        },
+    }
+}
+
+/// `--version`, or `default` when absent.
+fn version_flag(args: &[String], lang: Lang) -> Option<AwgVersion> {
+    let raw = flag_value(args, "--version")?;
+    match AwgVersion::parse(&raw) {
+        Some(v) => Some(v),
+        None => {
+            let valid: Vec<&str> = AwgVersion::ALL.iter().map(|v| v.as_str()).collect();
+            bail(lang, K::ErrUnknownVersion, &raw, &valid);
+        }
+    }
+}
+
+/// The file, `-` or link after the command word, skipping flags and their
+/// values.
+fn check_target(args: &[String]) -> Option<String> {
+    let cmd = command_of(args)?;
+    let at = args.iter().position(|a| a == cmd)?;
+    let mut it = args[at + 1..].iter().peekable();
+    while let Some(a) = it.next() {
+        if VALUE_FLAGS.contains(&a.as_str()) {
+            it.next();
+        } else if a == "-" || !a.starts_with('-') {
+            return Some(a.clone());
+        }
+    }
+    None
+}
+
+/// `awg-tool check <file|-|vpn://...>`: read a config someone else wrote and
+/// say what is wrong with it. Exit 0 when clean, 1 with warnings, 2 with
+/// errors, so a script can gate on it.
+fn cmd_check(args: &[String], lang: Lang) {
+    let target = check_target(args);
+    let Some(target) = target else {
+        eprintln!("{}", t(lang, K::ErrCheckWhat));
+        std::process::exit(2);
+    };
+    let text = if target == "-" {
+        let mut s = String::new();
+        if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut s) {
+            eprintln!("awg-tool: stdin: {e}");
+            std::process::exit(2);
+        }
+        s
+    } else if target.starts_with("vpn://") {
+        target
+    } else {
+        match std::fs::read_to_string(&target) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("awg-tool: {target}: {e}");
+                std::process::exit(2);
+            }
+        }
+    };
+
+    let opts = CheckOptions {
+        client: client_flag(args, lang),
+        server_engine: engine_flag(args, lang),
+        version: version_flag(args, lang),
+    };
+    let report = check::check(&text, &opts);
+
+    if has_flag(args, "--json") {
+        let findings: Vec<serde_json::Value> = report
+            .findings
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "level": level_word(f.level),
+                    "field": f.field,
+                    "code": f.code,
+                    "message": f.message,
+                })
+            })
+            .collect();
+        let out = serde_json::json!({
+            "version": report.version.map(|v| v.as_str()),
+            "version_inferred": report.version_inferred,
+            "client": opts.client.id,
+            "server_engine": opts.server_engine.id(),
+            "findings": findings,
+        });
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+    } else {
+        match report.version {
+            Some(v) => println!(
+                "{}: AWG {v}{}",
+                t(lang, K::LblVersion),
+                if report.version_inferred {
+                    format!(" ({})", t(lang, K::MsgInferred))
+                } else {
+                    String::new()
+                }
+            ),
+            None => println!("{}", t(lang, K::MsgNotAwg)),
+        }
+        println!(
+            "{}: {} ({})",
+            t(lang, K::LblClient),
+            opts.client.name,
+            opts.client.engine.id()
+        );
+        if report.findings.is_empty() {
+            println!("{}", t(lang, K::MsgCheckClean));
+        }
+        for f in &report.findings {
+            println!("  {:<7} {:<20} {}", level_word(f.level), f.field, f.message);
+        }
+    }
+
+    std::process::exit(match report.worst() {
+        Some(Level::Error) => 2,
+        Some(Level::Warn) => 1,
+        _ => 0,
+    });
+}
+
+fn level_word(l: Level) -> &'static str {
+    match l {
+        Level::Error => "error",
+        Level::Warn => "warning",
+        Level::Info => "note",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,6 +792,35 @@ mod tests {
         // against a server literally named "status".
         assert_eq!(command_of(&a(&["--host", "status"])), None);
         assert_eq!(command_of(&a(&["--client", "gen"])), None);
+    }
+
+    #[test]
+    fn check_finds_its_target_whatever_the_flags_around_it() {
+        assert_eq!(
+            check_target(&a(&["check", "x.conf"])).as_deref(),
+            Some("x.conf")
+        );
+        assert_eq!(
+            check_target(&a(&["lint", "x.conf"])).as_deref(),
+            Some("x.conf")
+        );
+        assert_eq!(
+            check_target(&a(&[
+                "--client",
+                "wiresock",
+                "check",
+                "--version",
+                "3.1",
+                "-"
+            ]))
+            .as_deref(),
+            Some("-")
+        );
+        assert_eq!(
+            check_target(&a(&["check", "--json", "vpn://AA"])).as_deref(),
+            Some("vpn://AA")
+        );
+        assert_eq!(check_target(&a(&["check", "--json"])), None);
     }
 
     #[test]

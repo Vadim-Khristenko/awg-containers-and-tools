@@ -181,6 +181,16 @@ strings! {
         "for `hosts`: include hosts whose facts were never established",
         "для `hosts`: включить хосты, про которые ничего не установлено"
     ),
+    ErrCheckWhat => (
+        "check what? Give a .conf path, - for stdin, or a vpn:// link",
+        "что проверить? Укажи путь к .conf, - для stdin или ссылку vpn://"
+    ),
+    MsgInferred => ("read off its fields", "определена по полям"),
+    MsgNotAwg => (
+        "no AmneziaWG parameters in it",
+        "в нём нет параметров AmneziaWG"
+    ),
+    MsgCheckClean => ("nothing to report", "замечаний нет"),
     ErrUnknownRegion => ("unknown region", "неизвестный регион"),
     ErrUnknownRole => ("unknown role", "неизвестная роль"),
     OptProfile => (
