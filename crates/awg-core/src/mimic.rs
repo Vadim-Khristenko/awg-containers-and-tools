@@ -18,6 +18,7 @@
 pub mod dsl;
 mod hosts;
 mod profiles;
+pub mod stun;
 
 pub use dsl::{Chain, MAX_TAG_COUNT, PadKind, Tag, TagKind};
 
@@ -44,6 +45,8 @@ pub enum MimicProfile {
     /// Composite: Initial, 0-RTT and an HTTP/3 packet back to back.
     QuicBurst,
     DnsQuery,
+    /// STUN / TURN: a WebRTC call's first packets.
+    Stun,
     /// Redrawn per packet from the concrete profiles.
     Random,
 }
@@ -51,7 +54,7 @@ pub enum MimicProfile {
 impl MimicProfile {
     /// The profiles `Random` draws from — the dispatch table of `genI1`, in the
     /// same order, so a seeded run can be compared against the TypeScript.
-    pub const CONCRETE: [MimicProfile; 11] = [
+    pub const CONCRETE: [MimicProfile; 12] = [
         MimicProfile::QuicInitial,
         MimicProfile::Quic0Rtt,
         MimicProfile::TlsClientHello,
@@ -61,12 +64,13 @@ impl MimicProfile {
         MimicProfile::Http3,
         MimicProfile::Sip,
         MimicProfile::DnsQuery,
+        MimicProfile::Stun,
         MimicProfile::TlsToQuic,
         MimicProfile::QuicBurst,
     ];
 
     /// Every value, including `Random`.
-    pub const ALL: [MimicProfile; 12] = [
+    pub const ALL: [MimicProfile; 13] = [
         MimicProfile::QuicInitial,
         MimicProfile::Quic0Rtt,
         MimicProfile::TlsClientHello,
@@ -78,6 +82,7 @@ impl MimicProfile {
         MimicProfile::TlsToQuic,
         MimicProfile::QuicBurst,
         MimicProfile::DnsQuery,
+        MimicProfile::Stun,
         MimicProfile::Random,
     ];
 
@@ -95,6 +100,7 @@ impl MimicProfile {
             MimicProfile::TlsToQuic => "tls-to-quic",
             MimicProfile::QuicBurst => "quic-burst",
             MimicProfile::DnsQuery => "dns",
+            MimicProfile::Stun => "stun",
             MimicProfile::Random => "random",
         }
     }
@@ -113,6 +119,7 @@ impl MimicProfile {
             MimicProfile::TlsToQuic => "TLS -> QUIC",
             MimicProfile::QuicBurst => "QUIC Burst",
             MimicProfile::DnsQuery => "DNS Query",
+            MimicProfile::Stun => "STUN / TURN",
             MimicProfile::Random => "Random",
         }
     }
@@ -134,6 +141,7 @@ impl MimicProfile {
             "tls-to-quic" => MimicProfile::TlsToQuic,
             "quic-burst" => MimicProfile::QuicBurst,
             "dns" | "dns-query" => MimicProfile::DnsQuery,
+            "stun" | "turn" => MimicProfile::Stun,
             "random" => MimicProfile::Random,
             _ => return None,
         })
@@ -363,6 +371,11 @@ fn build_one(rng: &mut impl Rng, profile: MimicProfile, opts: &MimicOptions, iv:
         MimicProfile::Http3 => profiles::http3(rng, opts, iv),
         MimicProfile::Sip => profiles::sip(rng, opts, iv),
         MimicProfile::DnsQuery => profiles::dns_query(rng, opts, iv),
+        // Alone it is the authenticated Allocate, the one packet that names a host.
+        MimicProfile::Stun => {
+            let host = opts.host(rng, hosts::STUN);
+            stun::build(rng, opts, &host, stun::StunVariant::AllocateAuth)
+        }
         // The composites reuse the first packet of their pair when asked for a
         // single one, exactly as the TS dispatch table does.
         MimicProfile::TlsToQuic => profiles::tls_client_hello(rng, opts, iv),
@@ -399,6 +412,11 @@ pub fn generate_chain_set(
             let i4 = profiles::entropy(rng, opts, 3, iv);
             let i5 = profiles::entropy(rng, opts, 4, iv);
             [i1, i2, i3, i4, i5]
+        }
+        MimicProfile::Stun if opts.mimic_all => {
+            // The flow a WebRTC client walks through, one packet per slot.
+            let host = opts.host(rng, hosts::STUN);
+            stun::STUN_FLOW.map(|v| stun::build(rng, opts, &host, v))
         }
         MimicProfile::DnsQuery => {
             let i1 = profiles::dns_query(rng, opts, iv);
@@ -838,6 +856,38 @@ mod tests {
                 .sum()
         };
         assert!(sum(&loud) > sum(&quiet));
+    }
+
+    #[test]
+    fn the_stun_profile_walks_the_webrtc_flow_across_the_slots() {
+        let opts = MimicOptions {
+            mimic_all: true,
+            ..all_tags()
+        };
+        let set = generate_chain_set(
+            &mut SeededRng::new(5),
+            MimicProfile::Stun,
+            Intensity::Medium,
+            &opts,
+        );
+        // Binding, Allocate, Allocate with credentials, ICE check, ICE check.
+        let types: Vec<[u8; 2]> = set
+            .iter()
+            .map(|c| match &c.tags()[0] {
+                Tag::Bytes(b) => [b[0], b[1]],
+                other => panic!("STUN starts with its header, not {other:?}"),
+            })
+            .collect();
+        assert_eq!(types, [[0, 1], [0, 3], [0, 3], [0, 1], [0, 1]]);
+
+        // Alone, I1 is the authenticated Allocate and the rest is entropy.
+        let alone = generate_chain_set(
+            &mut SeededRng::new(5),
+            MimicProfile::Stun,
+            Intensity::Medium,
+            &all_tags(),
+        );
+        assert!(matches!(&alone[0].tags()[0], Tag::Bytes(b) if b[..2] == [0, 3]));
     }
 
     #[test]

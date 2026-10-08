@@ -733,6 +733,39 @@ pub const SIP: &[&str] = &[
     "sip.3cx.com",
 ];
 
+/// STUN and TURN servers, the ones Architect's probe found answering STUN
+/// (`services.stun = yes`, checked 2026-08-01 from a Russian vantage).
+pub const STUN: &[&str] = &[
+    "global.stun.twilio.com",
+    "global.turn.twilio.com",
+    "stun.cloudflare.com",
+    "turn.cloudflare.com",
+    "stun.nextcloud.com",
+    "stun.sipnet.ru",
+    "stun.sipnet.net",
+    "stun.zadarma.com",
+    "stun.zepter.ru",
+    "sip.beeline.ru",
+    "dnd.wb.ru",
+    "stun.miwifi.com",
+    "stun.chat.bilibili.com",
+    "stun.linphone.org",
+    "stun.antisip.com",
+    "stun.ekiga.net",
+    "stun.freeswitch.org",
+    "stun.sipgate.net",
+    "stun.1und1.de",
+    "stun.gmx.net",
+    "stun.schlund.de",
+    "stun.ippi.fr",
+    "stun.plivo.com",
+    "stun.signalwire.com",
+    "stun.sonetel.com",
+    "stun.voip.blackberry.com",
+    "stun.counterpath.com",
+    "relay.webwormhole.io",
+];
+
 /// DNS — resolver addresses, used as the query target.
 pub const DNS: &[&str] = &[
     "77.88.8.8",
