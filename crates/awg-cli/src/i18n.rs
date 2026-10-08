@@ -74,6 +74,10 @@ strings! {
     CmdAbout => ("about this tool", "о программе"),
     OptVersion => ("protocol version: 1.0 | 1.5 | 2.0 | 3.0 | 3.1", "версия протокола: 1.0 | 1.5 | 2.0 | 3.0 | 3.1"),
     OptUapi => ("emit UAPI lines instead of .conf", "вывести строки UAPI вместо .conf"),
+    OptMihomo => (
+        "emit a mihomo (Clash.Meta) proxy entry instead of .conf",
+        "вывести блок прокси для mihomo (Clash.Meta) вместо .conf"
+    ),
     OptJson => ("emit the config as JSON, for scripts", "выдать конфиг в JSON — для скриптов"),
     OptOut => ("write the result to a file instead of stdout", "записать результат в файл вместо stdout"),
     OptSwitchesNote => (

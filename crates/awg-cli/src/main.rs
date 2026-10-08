@@ -179,7 +179,9 @@ fn usage(lang: Lang) {
     println!("  awg-tool clients");
     println!("      {}", t(lang, K::CmdClients));
     println!("  awg-tool profiles");
-    println!("  awg-tool peer add <label> [ip] [--out FILE] [--vpn] | list | rm <label|pubkey>");
+    println!(
+        "  awg-tool peer add <label> [ip] [--out FILE] [--vpn] [--mihomo] | list | rm <label|pubkey>"
+    );
     println!("  awg-tool check <file|-|vpn://...> [--client X] [--version 3.1] [--json]");
     println!("  awg-tool hosts [--role quic] [--region ru] [--whitelisted ru] [--unknown]");
     println!("      {}", t(lang, K::CmdProfiles));
@@ -209,6 +211,7 @@ fn usage(lang: Lang) {
     );
     println!("  --server-engine go   {}", t(lang, K::OptServerEngine));
     println!("  --uapi               {}", t(lang, K::OptUapi));
+    println!("  --mihomo             {}", t(lang, K::OptMihomo));
     println!("  --json               {}", t(lang, K::OptJson));
     println!("  --out client.conf    {}", t(lang, K::OptOut));
     println!("  --intensity medium   {}", t(lang, K::OptIntensity));
@@ -404,7 +407,11 @@ fn cmd_gen(args: &[String], lang: Lang) {
      * internal types — the render is the contract, and this way the JSON can
      * never disagree with what the same run would have written to a file.
      */
-    let body = if has_flag(args, "--json") {
+    let body = if has_flag(args, "--mihomo") {
+        awg_core::mihomo::render(&params, &awg_core::mihomo::MihomoPeer::placeholders())
+            .trim_end()
+            .to_string()
+    } else if has_flag(args, "--json") {
         let mut obj = serde_json::Map::new();
         obj.insert("version".into(), serde_json::json!(version.as_str()));
         obj.insert("profile".into(), serde_json::json!(profile.id()));

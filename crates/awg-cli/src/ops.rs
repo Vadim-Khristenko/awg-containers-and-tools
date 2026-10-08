@@ -641,6 +641,13 @@ pub fn cmd_peer(args: &[String], lang: Lang) {
                 }
                 None => println!("{conf}"),
             }
+            if args.iter().any(|a| a == "--mihomo") {
+                let parsed = awg_core::check::ConfFile::parse(&conf);
+                if let Some(params) = &report.params {
+                    let peer = awg_core::mihomo::MihomoPeer::from_conf(&parsed, label);
+                    println!("{}", awg_core::mihomo::render(params, &peer));
+                }
+            }
             if args.iter().any(|a| a == "--vpn") {
                 match awg_core::vpn::conf_to_vpn(&conf) {
                     Ok(link) => println!("{link}"),
