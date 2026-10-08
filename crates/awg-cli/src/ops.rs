@@ -15,7 +15,7 @@ use awg_core::profile;
 use awg_core::rng::SecureRng;
 use awg_core::ssh;
 use awg_core::update;
-use awg_core::versions::AwgVersion;
+use awg_core::versions::{AwgVersion, Level};
 
 use crate::i18n::{Key as K, Lang, t};
 use crate::remote;
@@ -557,6 +557,111 @@ fn pick<'a>(found: &'a [Container], name: Option<&str>, lang: Lang) -> Vec<&'a C
     }
 }
 
+/// The words after `peer`, flags and their values left out.
+fn peer_words(args: &[String]) -> Vec<String> {
+    let at = args.iter().position(|a| a == "peer").map_or(0, |i| i + 1);
+    let mut out = Vec::new();
+    let mut it = args[at..].iter();
+    while let Some(a) = it.next() {
+        if crate::VALUE_FLAGS.contains(&a.as_str()) {
+            it.next();
+        } else if !a.starts_with("--") {
+            out.push(a.clone());
+        }
+    }
+    out
+}
+
+/// `awg-tool peer add|list|rm`: the node's own `awg-peer`, run on whichever
+/// node `status` would pick, here or over SSH.
+pub fn cmd_peer(args: &[String], lang: Lang) {
+    let words = peer_words(args);
+    let sub = words.first().map(String::as_str).unwrap_or("list");
+    if !matches!(sub, "add" | "list" | "ls" | "rm" | "remove") {
+        eprintln!("{}: {sub}", t(lang, K::ErrUnknownCmd));
+        eprintln!("  awg-tool peer add <label> [ip] | list | rm <label|pubkey>");
+        std::process::exit(2);
+    }
+
+    let (conn, found) = survey(args, lang);
+    let host = conn.host();
+    let wanted = flag(args, "--container").unwrap_or_else(|| "auto".into());
+    let nodes = pick(&found, Some(&wanted), lang);
+    let Some(node) = nodes.first() else {
+        fail(t(lang, K::MsgNoContainers).into());
+    };
+
+    match sub {
+        "list" | "ls" => match docker::peers::list(&host, &node.name) {
+            Ok(rows) if rows.is_empty() => println!("{}", t(lang, K::MsgNoPeers)),
+            Ok(rows) => {
+                println!(
+                    "{:<16} {:<44} {:<20} HANDSHAKE",
+                    "LABEL", "PUBLIC_KEY", "ALLOWED_IPS"
+                );
+                for r in rows {
+                    println!(
+                        "{:<16} {:<44} {:<20} {}",
+                        r.label, r.public_key, r.allowed_ips, r.last_handshake
+                    );
+                }
+            }
+            Err(e) => fail(e.to_string()),
+        },
+        "rm" | "remove" => {
+            let Some(who) = words.get(1) else {
+                fail("awg-tool peer rm <label|pubkey>".into());
+            };
+            match docker::peers::remove(&host, &node.name, who) {
+                Ok(msg) => println!("{msg}"),
+                Err(e) => fail(e.to_string()),
+            }
+        }
+        _ => {
+            let Some(label) = words.get(1) else {
+                fail("awg-tool peer add <label> [ip]".into());
+            };
+            let conf =
+                docker::peers::add(&host, &node.name, label, words.get(2).map(String::as_str))
+                    .unwrap_or_else(|e| fail(e.to_string()));
+
+            // The node is trusted to issue a working config; checking it costs
+            // nothing and catches a node whose own config drifted.
+            let report = awg_core::check::check(&conf, &Default::default());
+            for f in report.findings.iter().filter(|f| f.level == Level::Error) {
+                eprintln!("!  {}: {}", f.field, f.message);
+            }
+
+            match flag(args, "--out") {
+                Some(path) => {
+                    if let Err(e) = write_private(&path, &conf) {
+                        fail(format!("{path}: {e}"));
+                    }
+                    eprintln!("{} {path}", t(lang, K::MsgWrote));
+                }
+                None => println!("{conf}"),
+            }
+            if args.iter().any(|a| a == "--vpn") {
+                match awg_core::vpn::conf_to_vpn(&conf) {
+                    Ok(link) => println!("{link}"),
+                    Err(e) => eprintln!("!  {e}"),
+                }
+            }
+        }
+    }
+}
+
+/// A client config holds its private key: readable by its owner only.
+fn write_private(path: &str, text: &str) -> std::io::Result<()> {
+    std::fs::write(path, text)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,6 +670,20 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
+    #[test]
+    fn peer_reads_its_words_around_the_connection_flags() {
+        assert_eq!(
+            peer_words(&a(&[
+                "--server", "home", "peer", "add", "laptop", "--vpn", "10.8.1.7"
+            ])),
+            ["add", "laptop", "10.8.1.7"]
+        );
+        assert_eq!(
+            peer_words(&a(&["peer", "rm", "--container", "awg31-server", "phone"])),
+            ["rm", "phone"]
+        );
+        assert!(peer_words(&a(&["peer"])).is_empty());
+    }
     #[test]
     fn a_flags_value_is_never_mistaken_for_the_container_name() {
         // `logs --profile home` names no container; taking "home" would print

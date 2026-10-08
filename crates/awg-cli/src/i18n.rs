@@ -191,6 +191,8 @@ strings! {
         "в нём нет параметров AmneziaWG"
     ),
     MsgCheckClean => ("nothing to report", "замечаний нет"),
+    MsgWrote => ("written to", "записано в"),
+    MsgNoPeers => ("no peers on this node yet", "на этом узле пока нет пиров"),
     ErrUnknownRegion => ("unknown region", "неизвестный регион"),
     ErrUnknownRole => ("unknown role", "неизвестная роль"),
     OptProfile => (

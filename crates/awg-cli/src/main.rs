@@ -34,6 +34,7 @@ fn main() {
         Some("profiles") => cmd_profiles(lang),
         Some("hosts") => cmd_hosts(&args, lang),
         Some("check") | Some("lint") => cmd_check(&args, lang),
+        Some("peer") | Some("peers") => ops::cmd_peer(&args, lang),
         Some("status") => ops::cmd_status(&args, lang),
         Some("logs") => ops::cmd_logs(&args, lang),
         Some("doctor") | Some("diagnose") => ops::cmd_doctor(&args, lang),
@@ -66,7 +67,7 @@ fn main() {
 /// Every flag that consumes the argument after it. Needed in exactly one place
 /// — working out which word is the command — but wrong here means a flag's
 /// value gets run as a subcommand.
-const VALUE_FLAGS: &[&str] = &[
+pub(crate) const VALUE_FLAGS: &[&str] = &[
     "--version",
     "--profile",
     "--client",
@@ -93,6 +94,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--role",
     "--attempt",
     "--mimic-host",
+    "--out",
 ];
 
 /// The first word that is neither a flag nor a flag's value.
@@ -177,6 +179,7 @@ fn usage(lang: Lang) {
     println!("  awg-tool clients");
     println!("      {}", t(lang, K::CmdClients));
     println!("  awg-tool profiles");
+    println!("  awg-tool peer add <label> [ip] [--out FILE] [--vpn] | list | rm <label|pubkey>");
     println!("  awg-tool check <file|-|vpn://...> [--client X] [--version 3.1] [--json]");
     println!("  awg-tool hosts [--role quic] [--region ru] [--whitelisted ru] [--unknown]");
     println!("      {}", t(lang, K::CmdProfiles));

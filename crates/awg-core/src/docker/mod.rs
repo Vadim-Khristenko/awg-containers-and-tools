@@ -47,6 +47,7 @@ pub mod image;
 pub mod inspect;
 pub mod logs;
 pub mod obfuscation;
+pub mod peers;
 pub mod tunnel;
 
 pub use diagnose::{
