@@ -158,8 +158,8 @@ strings! {
         "поднять потолки: Jc до 128, S3 за 64, широкие окна H"
     ),
     OptNarrowH => (
-        "3.1 header windows: narrow (~20k, a CPU workaround) or wide; on 3.1 narrow is the default",
-        "окна заголовков 3.1: narrow (~20k, обход нагрузки CPU) или wide; на 3.1 по умолчанию narrow"
+        "3.1 header windows: narrow (~20k, a CPU workaround) or wide; narrow by default on 3.1, and always with --random-trailers",
+        "окна заголовков 3.1: narrow (~20k, обход нагрузки CPU) или wide; на 3.1 по умолчанию narrow, а с --random-trailers всегда"
     ),
     ErrBadJunk => ("--junk out of range", "--junk вне допустимого диапазона"),
     Available => ("available", "доступно"),

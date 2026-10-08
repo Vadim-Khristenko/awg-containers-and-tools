@@ -1090,7 +1090,9 @@ pub fn generate(rng: &mut impl Rng, opts: &GenOptions) -> Result<VersionedParams
         router_mode: opts.router_mode,
         extreme: opts.extreme,
         junk_level: opts.junk_level,
-        narrow_h: opts.narrow_h && opts.version == AwgVersion::V3_1,
+        // Under RandomTrailers a wide H1-H3 is nothing but lost packets (see
+        // trailer_loss), so the trailers bring the narrow windows with them.
+        narrow_h: opts.version == AwgVersion::V3_1 && (opts.narrow_h || opts.random_trailers),
         client_max_h: client.max_h_value,
         client_max_jc: client.max_jc,
         client_max_s4: client.max_s4,
@@ -1207,6 +1209,52 @@ pub fn generate(rng: &mut impl Rng, opts: &GenOptions) -> Result<VersionedParams
 
 // -------------------------------------------------------------- validators
 
+/// Above this share of lost transport packets the H1-H3 width gets a warning.
+///
+/// Three ranges at the narrow 3.1 width (20,000 each) lose about 1.4e-5, so
+/// nothing generated with --narrow-h gets near. 1e-4 is about 430,000 of
+/// combined width; Architect issue #14 proposed the number.
+pub const TRAILER_LOSS_MAX: f64 = 1e-4;
+
+/// The share of transport packets a receiver drops because of H1-H3's width,
+/// or `None` when RandomTrailers is off and the width costs nothing.
+///
+/// amneziawg-go `device/receive.go`, `DeterminePacketTypeAndPadding` (tag
+/// v3.1.20260828): the init, response and cookie branches are guarded by
+/// `size == expectedSize || randomTrailers && size > expectedSize`. With the
+/// trailers on, the second half swallows the size check, and the four bytes at
+/// S1, S2 and S3 of every transport packet, uniform ciphertext, are tested
+/// against H1, H2 and H3 in turn. A hit goes to the handshake queue and dies at
+/// `CheckMAC1`. So each range takes width / 2^32 of the traffic, one after
+/// another: `1 - prod(1 - W / 2^32)`. H4 is checked last and costs nothing.
+pub fn trailer_loss(params: &VersionedParams) -> Option<f64> {
+    if !params.awg3.as_ref().is_some_and(|p| p.random_trailers) {
+        return None;
+    }
+    const HEADER_SPACE: f64 = 4_294_967_296.0;
+    let kept: f64 = (0..3)
+        .map(|i| {
+            let r = params.h_range(i);
+            let width = f64::from(r.hi.saturating_sub(r.lo)) + 1.0;
+            1.0 - (width / HEADER_SPACE).min(1.0)
+        })
+        .product();
+    Some(1.0 - kept)
+}
+
+/// A share as a percentage with as many decimals as it takes to show it.
+fn format_share(share: f64) -> String {
+    let pct = share * 100.0;
+    let decimals = if pct >= 1.0 {
+        1
+    } else if pct >= 0.1 {
+        2
+    } else {
+        3
+    };
+    format!("{pct:.decimals$}%")
+}
+
 /// Check a parameter set against one client, returning every concrete problem.
 ///
 /// Errors are configs that will be refused or that will fail silently; warnings
@@ -1280,6 +1328,23 @@ pub fn validate_for(
                 ),
             ));
         }
+    }
+
+    if let Some(loss) = trailer_loss(params)
+        && loss > TRAILER_LOSS_MAX
+    {
+        out.push(Violation::warn(
+            "H1-H3",
+            "h.width_loss",
+            format!(
+                "with RandomTrailers on, the receiver tests every transport packet against \
+                 H1-H3 and drops the ones that land inside: at these widths that is {} of \
+                 traffic, one packet in {}, and nothing logs it. Narrow H1-H3 to a few tens \
+                 of thousands (--narrow-h); H4 is checked last and can stay wide",
+                format_share(loss),
+                (1.0 / loss).round() as u64
+            ),
+        ));
     }
 
     // ---- padding sizes
@@ -2516,6 +2581,94 @@ mod tests {
         assert_eq!(level_on("amneziavpn", Engine::Kmod), Some(Level::Error));
         assert_eq!(level_on("openwrt", Engine::Go), Some(Level::Error));
         assert_eq!(level_on("wg-easy", Engine::Go), Some(Level::Error));
+    }
+
+    /// A 3.1 set with the trailers on and the given H1-H3 ranges.
+    fn with_trailers(h: [(u32, u32); 3]) -> VersionedParams {
+        let mut p = make(AwgVersion::V3_1, 1);
+        for (i, (lo, hi)) in h.into_iter().enumerate() {
+            p.base.h[i] = lo;
+            p.h_hi.as_mut().unwrap()[i] = hi;
+        }
+        p.base.h[3] = 3_600_000_000;
+        p.h_hi.as_mut().unwrap()[3] = 3_700_000_000;
+        p.awg3.as_mut().unwrap().random_trailers = true;
+        p
+    }
+
+    /// Architect issue #14: the reporter's ranges.
+    const ISSUE_14: [(u32, u32); 3] = [
+        (405_138_553, 456_138_212),
+        (680_931_238, 1_038_459_501),
+        (1_114_423_399, 1_432_068_193),
+    ];
+
+    #[test]
+    fn trailer_loss_reproduces_the_issue_and_ignores_h4() {
+        let p = with_trailers(ISSUE_14);
+        let loss = trailer_loss(&p).unwrap();
+        assert!((loss - 0.161).abs() < 5e-4, "{loss}");
+
+        let mut wide_h4 = p.clone();
+        wide_h4.base.h[3] = 1;
+        wide_h4.h_hi.as_mut().unwrap()[3] = u32::MAX;
+        assert_eq!(trailer_loss(&wide_h4), Some(loss));
+
+        let mut off = p;
+        off.awg3.as_mut().unwrap().random_trailers = false;
+        assert_eq!(trailer_loss(&off), None);
+    }
+
+    #[test]
+    fn the_width_warning_names_the_share_and_the_one_in_n() {
+        let found = validate_for_client(&with_trailers(ISSUE_14), default_client());
+        let hit = found
+            .iter()
+            .find(|x| x.code == "h.width_loss")
+            .unwrap_or_else(|| panic!("{found:?}"));
+        assert_eq!(hit.level, Level::Warn);
+        assert!(hit.message.contains("16.1%"), "{}", hit.message);
+        assert!(hit.message.contains("one packet in 6"), "{}", hit.message);
+    }
+
+    #[test]
+    fn the_width_warning_sits_at_the_threshold() {
+        // Three equal widths whose combined loss is `share`.
+        let at = |share: f64| {
+            let w = ((1.0 - (1.0 - share).cbrt()) * 4_294_967_296.0).round() as u32;
+            with_trailers([
+                (1000, 1000 + w - 1),
+                (1_000_000_000, 1_000_000_000 + w - 1),
+                (2_000_000_000, 2_000_000_000 + w - 1),
+            ])
+        };
+        let codes = |p: &VersionedParams| -> Vec<&'static str> {
+            validate_for_client(p, default_client())
+                .into_iter()
+                .map(|x| x.code)
+                .collect()
+        };
+        assert!(!codes(&at(TRAILER_LOSS_MAX * 0.9)).contains(&"h.width_loss"));
+        assert!(codes(&at(TRAILER_LOSS_MAX * 1.1)).contains(&"h.width_loss"));
+    }
+
+    #[test]
+    fn generation_with_trailers_never_trips_the_width_warning() {
+        // Not even with the narrow windows asked off: under the trailers the
+        // width buys nothing but loss.
+        for seed in 0..60u64 {
+            let p = generate(
+                &mut SeededRng::new(seed),
+                &GenOptions {
+                    version: AwgVersion::V3_1,
+                    random_trailers: true,
+                    narrow_h: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert!(trailer_loss(&p).unwrap() <= TRAILER_LOSS_MAX, "seed {seed}");
+        }
     }
 
     #[test]
