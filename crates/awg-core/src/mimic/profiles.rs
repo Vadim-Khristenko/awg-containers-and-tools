@@ -548,15 +548,67 @@ fn hex_token(rng: &mut impl Rng, bytes: usize) -> String {
     raw.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub(super) fn dns_query(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
-    let host = opts.host(rng, super::hosts::DNS);
+/// The fixed DNS header: ID, flags, and the four section counts.
+const DNS_HEADER: u32 = 12;
+/// OPT pseudo-record, RFC 6891: name, type, class, TTL, RDLENGTH.
+const DNS_OPT_FIXED: u32 = 1 + 2 + 2 + 4 + 2;
+/// The Padding option's own header: code and length. RFC 7830.
+const DNS_PAD_OPTION_HEADER: u32 = 4;
+/// UDP payload size advertised in the OPT record's CLASS field.
+const EDNS_UDP_SIZE: u32 = 1232;
 
-    let mut name = Vec::new();
-    for label in host.split('.') {
-        name.push(label.len() as u8);
-        name.extend_from_slice(label.as_bytes());
+/// A hostname as DNS labels ending with the root label. A label past 63 bytes
+/// cannot be length-prefixed (the top two bits of the length byte mean a
+/// compression pointer), and a name past 255 bytes is not a name.
+fn dns_name(host: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for label in host.split('.').filter(|l| !l.is_empty()) {
+        let label = &label.as_bytes()[..label.len().min(63)];
+        if out.len() + 1 + label.len() + 1 > 255 {
+            break;
+        }
+        out.push(label.len() as u8);
+        out.extend_from_slice(label);
     }
-    name.push(0); // root
+    out.push(0);
+    out
+}
+
+/// A DNS query, per RFC 1035 §4.1, padded the way DNS actually pads.
+///
+/// Padding appended after the question makes the message malformed: with
+/// QDCOUNT 1 and nothing else counted, a resolver runs past what it was told to
+/// expect. DNS has a mechanism for exactly this, the Padding option (RFC 7830)
+/// in an OPT record, which is what DoT and DoH clients send to hide how long a
+/// query is. So the message declares ARCOUNT 1 and every byte the tags put
+/// after the blob, the timestamp and counter included, is that option's data.
+pub(super) fn dns_query(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
+    // A on even iterations, AAAA on odd: a resolver asks for both in practice.
+    let wants_ipv6 = !iv.is_multiple_of(2);
+    let host = opts.host(rng, super::hosts::DNS);
+    let question_len = dns_name(&host).len() as u32 + 4;
+
+    // Below about 83 the bounds cross; a tiny MTU gets no padding, not a panic.
+    let ceiling = 512.min(opts.mtu.saturating_sub(20));
+    let wanted = if ceiling <= 64 {
+        ceiling
+    } else {
+        rng.range(64, ceiling)
+    };
+    let room = opts
+        .mtu
+        .saturating_sub(DNS_HEADER + question_len + DNS_OPT_FIXED + DNS_PAD_OPTION_HEADER);
+    let tag_bytes = tag_overhead(opts);
+    let padding = if opts.tag_r {
+        wanted
+            .saturating_sub(DNS_HEADER + question_len)
+            .min(room.saturating_sub(tag_bytes))
+            .min(200)
+    } else {
+        0
+    };
+    let option_data = padding + tag_bytes;
+    let padded = option_data > 0;
 
     let mut b = Buf::new();
     b.random(rng, 2) // transaction id
@@ -564,27 +616,28 @@ pub(super) fn dns_query(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Cha
         .lit(&[0x00, 0x01]) // QDCOUNT
         .lit(&[0x00, 0x00]) // ANCOUNT
         .lit(&[0x00, 0x00]) // NSCOUNT
-        .lit(&[0x00, 0x00]) // ARCOUNT
-        .lit(&name)
-        // Alternating A and AAAA across the chain, so five packets do not all
-        // ask the same question.
-        .lit(if iv.is_multiple_of(2) {
-            &[0x00, 0x01]
-        } else {
+        .be(u32::from(padded), 2) // ARCOUNT
+        .lit(&dns_name(&host))
+        .lit(if wants_ipv6 {
             &[0x00, 0x1c]
+        } else {
+            &[0x00, 0x01]
         })
         .lit(&[0x00, 0x01]); // IN
-
-    let header_b = b.len();
-    // A real query is padded out by the resolver's own EDNS options; 512 is the
-    // classic UDP DNS ceiling.
-    let target_size = rng.range(64, 512.min(opts.mtu.saturating_sub(20)));
-    let r_len = target_size.saturating_sub(header_b);
+    if padded {
+        b.lit(&[0x00]) // root
+            .lit(&[0x00, 0x29]) // OPT
+            .be(EDNS_UDP_SIZE, 2)
+            .lit(&[0x00, 0x00, 0x00, 0x00]) // extended rcode and flags
+            .be(DNS_PAD_OPTION_HEADER + option_data, 2)
+            .lit(&[0x00, 0x0c]) // Padding
+            .be(option_data, 2);
+    }
 
     let mut c = Chain::new();
     c.push(b.into_tag());
-    if opts.tag_r && r_len > 0 {
-        c.push_padding(r_len.min(200), PadKind::Bytes);
+    if padding > 0 {
+        c.push_padding(padding, PadKind::Bytes);
     }
     c.push_if(opts.tag_t, Tag::Timestamp)
         .push_if(opts.tag_c, Tag::Counter);
@@ -973,6 +1026,57 @@ mod tests {
                 short.len(),
                 full.len()
             );
+        }
+    }
+
+    #[test]
+    fn a_dns_query_accounts_for_every_byte_it_carries() {
+        for opts in [
+            all_tags(),
+            MimicOptions::default(),
+            MimicOptions {
+                tag_r: false,
+                ..all_tags()
+            },
+            MimicOptions {
+                tag_r: false,
+                tag_t: false,
+                ..MimicOptions::default()
+            },
+            MimicOptions {
+                mtu: 80,
+                ..all_tags()
+            },
+        ] {
+            for (seed, iv) in (0..120u64).zip([1u32, 2].into_iter().cycle()) {
+                let mut rng = SeededRng::new(seed);
+                let pkt = dns_query(&mut rng, &opts, iv).materialize(&mut rng, 1, 2);
+                let u16_at = |i: usize| usize::from(u16::from_be_bytes([pkt[i], pkt[i + 1]]));
+                assert_eq!(&pkt[2..6], &[0x01, 0x00, 0x00, 0x01], "query, one question");
+                assert_eq!(u16_at(6) + u16_at(8), 0, "no answers or authority");
+                let arcount = u16_at(10);
+                let mut at = 12;
+                while pkt[at] != 0 {
+                    assert!(pkt[at] <= 63, "label length");
+                    at += 1 + usize::from(pkt[at]);
+                }
+                at += 1;
+                let qtype = u16_at(at);
+                assert_eq!(qtype, if iv % 2 == 0 { 1 } else { 28 }, "A or AAAA");
+                at += 4;
+                if arcount == 1 {
+                    assert_eq!(pkt[at], 0, "OPT owner is the root");
+                    assert_eq!(u16_at(at + 1), 41, "OPT");
+                    let rdlength = u16_at(at + 9);
+                    at += 11;
+                    assert_eq!(u16_at(at), 12, "Padding option");
+                    assert_eq!(u16_at(at + 2) + 4, rdlength);
+                    at += rdlength;
+                } else {
+                    assert_eq!(arcount, 0);
+                }
+                assert_eq!(at, pkt.len(), "seed {seed}: bytes past the message");
+            }
         }
     }
 
