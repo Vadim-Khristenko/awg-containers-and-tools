@@ -34,6 +34,23 @@ impl Buf {
         self.be(value, 1)
     }
 
+    /// A QUIC variable-length integer, RFC 9000 §16: the top two bits of the
+    /// first byte give the length (1, 2, 4 or 8 bytes), the rest is the value.
+    fn varint(&mut self, value: u32) -> &mut Self {
+        let v = u64::from(value);
+        match v {
+            0..0x40 => self.0.push(v as u8),
+            0x40..0x4000 => self.0.extend_from_slice(&(0x4000 | v as u16).to_be_bytes()),
+            0x4000..0x4000_0000 => self
+                .0
+                .extend_from_slice(&(0x8000_0000 | v as u32).to_be_bytes()),
+            _ => self
+                .0
+                .extend_from_slice(&(0xc000_0000_0000_0000 | v).to_be_bytes()),
+        }
+        self
+    }
+
     fn lit(&mut self, bytes: &[u8]) -> &mut Self {
         self.0.extend_from_slice(bytes);
         self
@@ -104,6 +121,17 @@ fn align_to_128(n: u32) -> u32 {
 
 // ------------------------------------------------------------------- profiles
 
+/// A QUIC Initial, per RFC 9000 §17.2.2.
+///
+/// The header is built in wire order, and the Length field is computed rather
+/// than filled with random bytes: it is a varint covering the packet number and
+/// everything after it, so the padding is decided first and the header
+/// assembled around it. The tags after the `<b>` are on the wire behind the
+/// header too, so their bytes belong in the Length as much as the padding does.
+///
+/// First byte: long header, fixed bit, type Initial, reserved bits, then the
+/// packet number length minus one. A client's first Initial carries a
+/// Destination Connection ID of at least 8 bytes (§7.2); both IDs cap at 20.
 pub(super) fn quic_initial(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
     let host = opts.host(rng, super::hosts::QUIC_INITIAL);
     let dcid = rng.range(8, 20);
@@ -115,28 +143,30 @@ pub(super) fn quic_initial(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> 
         rng.range(8, 32)
     };
     let sni_rc = (host.len() as u32 + rng.range(0, 6)).min(64);
+    let pn_len = rng.range(1, 4);
 
     let mut b = Buf::new();
-    b.u8(0xc0 | rng.range(0, 3)) // long header, Initial, random packet-number length
-        .lit(&[0x00, 0x00, 0x00, 0x01]) // version 1
+    b.u8(0xc0 | (pn_len - 1))
+        .lit(&QUIC_V1)
         .u8(dcid)
         .random(rng, dcid)
         .u8(scid)
         .random(rng, scid)
-        .u8(token_len)
-        .random(rng, token_len)
-        .random(rng, 4);
+        .varint(token_len)
+        .random(rng, token_len);
 
-    let header_b = b.len();
     let extra_b = if opts.tag_rc { sni_rc } else { 0 } + tag_overhead(opts);
-    let pad = calc_padding(
+    let pad = quic_pad(
         rng,
-        header_b,
+        &b,
+        pn_len,
         extra_b,
         opts.fp_range(BfpSlot::Qi),
         iv,
         opts.mtu,
     );
+    let sent_pad = if opts.tag_r { pad } else { 0 };
+    b.varint(pn_len + sent_pad + extra_b).random(rng, pn_len);
 
     let mut c = Chain::new();
     c.push(b.into_tag())
@@ -149,31 +179,35 @@ pub(super) fn quic_initial(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> 
     c
 }
 
+/// A QUIC 0-RTT packet, per RFC 9000 §17.2.3: type `01` and, unlike an
+/// Initial, no token field.
 pub(super) fn quic_0rtt(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
     let host = opts.host(rng, super::hosts::QUIC_0RTT);
     let dcid = rng.range(8, 20);
     let scid = rng.range(0, 20);
     let ticket_hint = (host.len() as u32 + rng.range(4, 16)).min(48);
+    let pn_len = rng.range(1, 4);
 
     let mut b = Buf::new();
-    b.u8(0xd0 | rng.range(0, 3)) // long header, 0-RTT
-        .lit(&[0x00, 0x00, 0x00, 0x01])
+    b.u8(0xd0 | (pn_len - 1))
+        .lit(&QUIC_V1)
         .u8(dcid)
         .random(rng, dcid)
         .u8(scid)
-        .random(rng, scid)
-        .random(rng, 4);
+        .random(rng, scid);
 
-    let header_b = b.len();
     let extra_b = if opts.tag_rc { ticket_hint } else { 0 } + tag_overhead(opts);
-    let pad = calc_padding(
+    let pad = quic_pad(
         rng,
-        header_b,
+        &b,
+        pn_len,
         extra_b,
         opts.fp_range(BfpSlot::Q0),
         iv,
         opts.mtu,
     );
+    let sent_pad = if opts.tag_r { pad } else { 0 };
+    b.varint(pn_len + sent_pad + extra_b).random(rng, pn_len);
 
     let mut c = Chain::new();
     c.push(b.into_tag()).push_if(opts.tag_t, Tag::Timestamp);
@@ -185,35 +219,50 @@ pub(super) fn quic_0rtt(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Cha
     c
 }
 
+/// A long-header packet from an HTTP/3 connection's opening: Initial or
+/// Handshake.
+///
+/// The two differ in more than the type nibble: an Initial carries a token
+/// length and a Handshake does not (§17.2.2, §17.2.4). Picking a first byte
+/// from both types and writing one structure for all of them gave half the
+/// packets a field their own type says is not there.
 pub(super) fn http3(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
-    // HTTP/3 rides on established QUIC, so this draws from the same pool but
-    // uses the short-header and 1-RTT packet types.
-    const PTYPES: [u32; 7] = [0xc0, 0xc1, 0xc2, 0xc3, 0xe0, 0xe1, 0xe2];
     let host = opts.host(rng, super::hosts::QUIC_INITIAL);
     let dcid = rng.range(8, 20);
     let scid = rng.range(0, 20);
     // +9 for the `:authority` framing a real HEADERS frame puts around the host.
     let sni_len = (host.len() as u32 + 9 + rng.range(0, 6)).min(64);
+    let pn_len = rng.range(1, 4);
+    let is_initial = rng.range(0, 1) == 0;
+    let token_len = if is_initial && rng.range(0, 1) == 1 {
+        rng.range(8, 32)
+    } else {
+        0
+    };
 
     let mut b = Buf::new();
-    b.u8(PTYPES[rng.range(0, PTYPES.len() as u32 - 1) as usize])
-        .lit(&[0x00, 0x00, 0x00, 0x01])
+    b.u8(if is_initial { 0xc0 } else { 0xe0 } | (pn_len - 1))
+        .lit(&QUIC_V1)
         .u8(dcid)
         .random(rng, dcid)
         .u8(scid)
-        .random(rng, scid)
-        .random(rng, 4);
+        .random(rng, scid);
+    if is_initial {
+        b.varint(token_len).random(rng, token_len);
+    }
 
-    let header_b = b.len();
     let extra_b = if opts.tag_rc { sni_len } else { 0 } + tag_overhead(opts);
-    let pad = calc_padding(
+    let pad = quic_pad(
         rng,
-        header_b,
+        &b,
+        pn_len,
         extra_b,
         opts.fp_range(BfpSlot::H3),
         iv,
         opts.mtu,
     );
+    let sent_pad = if opts.tag_r { pad } else { 0 };
+    b.varint(pn_len + sent_pad + extra_b).random(rng, pn_len);
 
     let mut c = Chain::new();
     c.push(b.into_tag())
@@ -224,6 +273,24 @@ pub(super) fn http3(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
     c.push_if(opts.tag_c, Tag::Counter)
         .push_if(opts.tag_t, Tag::Timestamp);
     c
+}
+
+/// QUIC version 1.
+const QUIC_V1: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
+
+/// The padding for a long-header packet whose Length is still to be written.
+/// Two bytes are reserved for that varint: any payload past 63 bytes needs
+/// them, and an Initial shorter than that would be strange in itself.
+fn quic_pad(
+    rng: &mut impl Rng,
+    prefix: &Buf,
+    pn_len: u32,
+    extra_b: u32,
+    range: Option<(u32, u32)>,
+    iv: u32,
+    mtu: u32,
+) -> u32 {
+    calc_padding(rng, prefix.len() + 2 + pn_len, extra_b, range, iv, mtu)
 }
 
 pub(super) fn tls_client_hello(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
@@ -528,4 +595,114 @@ pub(super) fn entropy(rng: &mut impl Rng, opts: &MimicOptions, idx: u32, iv: u32
         chain.push(Tag::Random(10));
     }
     chain
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rng::SeededRng;
+
+    fn read_varint(b: &[u8], at: &mut usize) -> u64 {
+        let len = 1usize << (b[*at] >> 6);
+        let mut v = u64::from(b[*at] & 0x3f);
+        for i in 1..len {
+            v = (v << 8) | u64::from(b[*at + i]);
+        }
+        *at += len;
+        v
+    }
+
+    /// Walk a long header the way a QUIC reader does and return
+    /// (first byte, declared Length, bytes actually behind the Length field).
+    fn parse_long_header(pkt: &[u8]) -> (u8, u64, usize) {
+        let first = pkt[0];
+        assert_eq!(first & 0xc0, 0xc0, "long header with the fixed bit");
+        assert_eq!(&pkt[1..5], &QUIC_V1, "version 1");
+        let mut at = 5;
+        let dcid = pkt[at] as usize;
+        assert!((8..=20).contains(&dcid), "DCID {dcid}");
+        at += 1 + dcid;
+        let scid = pkt[at] as usize;
+        assert!(scid <= 20, "SCID {scid}");
+        at += 1 + scid;
+        if first & 0x30 == 0x00 {
+            let token = read_varint(pkt, &mut at) as usize;
+            at += token;
+        }
+        let length = read_varint(pkt, &mut at);
+        (first, length, pkt.len() - at)
+    }
+
+    fn all_tags() -> MimicOptions {
+        MimicOptions {
+            tag_c: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn varints_take_the_width_their_value_needs() {
+        for (value, bytes) in [
+            (0u32, vec![0x00]),
+            (63, vec![0x3f]),
+            (64, vec![0x40, 0x40]),
+            (16_383, vec![0x7f, 0xff]),
+            (16_384, vec![0x80, 0x00, 0x40, 0x00]),
+        ] {
+            let mut b = Buf::new();
+            b.varint(value);
+            assert_eq!(b.0, bytes, "{value}");
+            let mut at = 0;
+            assert_eq!(read_varint(&b.0, &mut at), u64::from(value));
+        }
+    }
+
+    #[test]
+    fn every_quic_packet_declares_the_length_that_follows_it() {
+        type Build = fn(&mut SeededRng, &MimicOptions, u32) -> Chain;
+        let builders: [(&str, Build, &[u8]); 3] = [
+            ("initial", quic_initial, &[0x00]),
+            ("0-rtt", quic_0rtt, &[0x10]),
+            ("http3", http3, &[0x00, 0x20]),
+        ];
+        for (name, build, types) in builders {
+            for opts in [
+                all_tags(),
+                MimicOptions::default(),
+                MimicOptions {
+                    tag_r: false,
+                    tag_rc: false,
+                    ..all_tags()
+                },
+            ] {
+                for seed in 0..200u64 {
+                    let mut rng = SeededRng::new(seed);
+                    let pkt = build(&mut rng, &opts, 2).materialize(&mut rng, 7, 9);
+                    let (first, length, behind) = parse_long_header(&pkt);
+                    assert!(types.contains(&(first & 0x30)), "{name}: type {first:#x}");
+                    assert_eq!(length as usize, behind, "{name} seed {seed}: Length lies");
+                    let pn_len = u64::from(first & 0x03) + 1;
+                    assert!(
+                        length >= pn_len,
+                        "{name}: Length shorter than the packet number"
+                    );
+                    assert!(pkt.len() as u32 <= opts.mtu, "{name}: over the MTU");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn only_initials_carry_a_token() {
+        // A Handshake has no token field, so its Length comes straight after
+        // the SCID; parse_long_header would misread it otherwise and the
+        // Length check above would fail.
+        let mut seen = [false; 2];
+        for seed in 0..100u64 {
+            let mut rng = SeededRng::new(seed);
+            let pkt = http3(&mut rng, &all_tags(), 2).materialize(&mut rng, 1, 1);
+            seen[usize::from(pkt[0] & 0x20 != 0)] = true;
+        }
+        assert_eq!(seen, [true, true], "both Initial and Handshake come out");
+    }
 }
