@@ -406,6 +406,20 @@ strings! {
     ),
     LblUnreachable => ("no answer", "не отвечает"),
     MenuAboutSub => ("What this is, and why it exists", "Что это такое и зачем"),
+    MenuCheck => ("Check a config", "Проверить конфиг"),
+    MenuCheckSub => (
+        "a .conf or vpn:// link someone else wrote, against the chosen client",
+        "чужой .conf или ссылку vpn:// под выбранный клиент"
+    ),
+    CheckPrompt => (
+        "path to a .conf, or a vpn:// link; Enter checks, Esc leaves",
+        "путь к .conf или ссылка vpn://; Enter проверяет, Esc назад"
+    ),
+    CheckHint => (
+        "Client and server engine are the ones chosen on the generate screen.",
+        "Клиент и движок сервера берутся с экрана генерации."
+    ),
+    StatusFindings => ("findings", "замечаний"),
     MenuDonateSub => (
         "It is free, and stays free",
         "Он бесплатный и таким останется"

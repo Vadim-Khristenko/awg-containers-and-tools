@@ -15,6 +15,7 @@
 use std::io::{Stdout, stdout};
 
 use awg_core::awg3::Intensity;
+use awg_core::check::{self, CheckOptions, CheckReport};
 use awg_core::engines::Engine;
 use awg_core::mimic::hostdb::Region;
 use awg_core::mimic::{BrowserProfile, MimicProfile};
@@ -49,6 +50,7 @@ enum Screen {
     Deploy,
     About,
     Donate,
+    Check,
 }
 
 impl Screen {
@@ -60,6 +62,7 @@ impl Screen {
             Screen::Deploy => t(lang, K::MenuDeploy),
             Screen::About => t(lang, K::MenuAbout),
             Screen::Donate => t(lang, K::MenuDonate),
+            Screen::Check => t(lang, K::MenuCheck),
         }
     }
 }
@@ -186,6 +189,9 @@ pub struct App {
     servers: servers::Servers,
     status: Option<(String, Status)>,
     quit: bool,
+    /// The check screen: what was typed, and what the last run found.
+    check_input: String,
+    check_report: Option<CheckReport>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -216,6 +222,8 @@ impl App {
             servers: servers::Servers::new(),
             status: None,
             quit: false,
+            check_input: String::new(),
+            check_report: None,
         }
     }
 
@@ -239,6 +247,10 @@ impl App {
                 .map(|p| p.conf_lines().len())
                 .unwrap_or(0),
             Screen::Servers => self.servers.detail_lines().len(),
+            Screen::Check => self
+                .check_report
+                .as_ref()
+                .map_or(0, |r| r.findings.len() * 3),
             _ => 200,
         } as i32;
         self.scroll = (self.scroll as i32 + delta).clamp(0, limit.max(0)) as u16;
@@ -256,12 +268,17 @@ impl App {
         }
     }
 
-    fn menu_items(&self) -> [(&'static str, &'static str, Screen); 5] {
+    fn menu_items(&self) -> [(&'static str, &'static str, Screen); 6] {
         [
             (
                 t(self.lang, K::MenuGenerate),
                 t(self.lang, K::MenuGenerateSub),
                 Screen::Generate,
+            ),
+            (
+                t(self.lang, K::MenuCheck),
+                t(self.lang, K::MenuCheckSub),
+                Screen::Check,
             ),
             (
                 t(self.lang, K::MenuServers),
@@ -388,9 +405,65 @@ impl App {
         self.regenerate();
     }
 
+    /// Read what was typed (a path, or a vpn:// link) and check it against the
+    /// client and server engine chosen on the generate screen.
+    fn run_check(&mut self) {
+        let target = self.check_input.trim();
+        let text = if target.starts_with("vpn://") {
+            Ok(target.to_string())
+        } else {
+            std::fs::read_to_string(target)
+        };
+        match text {
+            Ok(text) => {
+                let report = check::check(
+                    &text,
+                    &CheckOptions {
+                        client: self.client(),
+                        server_engine: self.opts.server_engine,
+                        version: None,
+                    },
+                );
+                let status = match report.worst() {
+                    Some(Level::Error) => Status::Bad,
+                    _ => Status::Ok,
+                };
+                self.status = Some((
+                    format!(
+                        "{} {}",
+                        report.findings.len(),
+                        t(self.lang, K::StatusFindings)
+                    ),
+                    status,
+                ));
+                self.check_report = Some(report);
+                self.scroll = 0;
+            }
+            Err(e) => {
+                self.check_report = None;
+                self.status = Some((format!("{target}: {e}"), Status::Bad));
+            }
+        }
+    }
+
     fn on_key(&mut self, code: KeyCode) {
-        // Back and quit mean the same thing on every screen. Anything that
-        // needs Esc for itself would have to opt out here, and nothing does.
+        // The check screen takes text, so letters and Backspace are input
+        // there rather than quit and back. Esc still leaves.
+        if self.screen() == Screen::Check {
+            match code {
+                KeyCode::Esc => self.back(),
+                KeyCode::Enter => self.run_check(),
+                KeyCode::Backspace => {
+                    self.check_input.pop();
+                }
+                KeyCode::Char(c) => self.check_input.push(c),
+                KeyCode::Down => self.scroll_by(1),
+                KeyCode::Up => self.scroll_by(-1),
+                _ => {}
+            }
+            return;
+        }
+        // Back and quit mean the same thing on every other screen.
         match code {
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 self.quit = true;
@@ -880,6 +953,75 @@ fn draw_generate(f: &mut ratatui::Frame, app: &App, area: Rect) {
     }
 }
 
+/// The check screen: a line to type a path or link into, and what it found.
+fn draw_check(f: &mut ratatui::Frame, app: &App, area: Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(4)])
+        .split(area);
+
+    let input = Paragraph::new(Line::from(vec![
+        Span::styled(app.check_input.clone(), theme::base()),
+        Span::styled("█", theme::warn()),
+    ]))
+    .block(panel(t(app.lang, K::CheckPrompt), true));
+    f.render_widget(input, rows[0]);
+
+    let c = app.client();
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{}  ", t(app.lang, K::LblClient)), theme::dim()),
+        Span::styled(
+            format!("{} ({})", c.name, app.opts.server_engine.id()),
+            theme::base(),
+        ),
+    ])];
+    match &app.check_report {
+        None => lines.push(Line::from(Span::styled(
+            t(app.lang, K::CheckHint),
+            theme::dim(),
+        ))),
+        Some(r) => {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}  ", t(app.lang, K::LblVersion)), theme::dim()),
+                Span::styled(
+                    r.version
+                        .map_or_else(|| "-".to_string(), |v| format!("AWG {v}")),
+                    theme::base(),
+                ),
+            ]));
+            lines.push(Line::from(""));
+            if r.findings.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    t(app.lang, K::MsgCheckClean),
+                    theme::base(),
+                )));
+            }
+            for v in &r.findings {
+                let (mark, style) = match v.level {
+                    Level::Error => ("✕", theme::error()),
+                    Level::Warn => ("!", theme::warn()),
+                    Level::Info => ("i", theme::dim()),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{mark} "), style),
+                    Span::styled(format!("{}: ", v.field), style),
+                    Span::styled(v.message.clone(), theme::base()),
+                ]));
+            }
+        }
+    }
+    let height = rows[1].height.saturating_sub(2);
+    let width = rows[1].width.saturating_sub(2);
+    let max_scroll = wrapped_height(&lines, width).saturating_sub(height as usize) as u16;
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: true })
+            .scroll((app.scroll.min(max_scroll), 0))
+            .block(panel(t(app.lang, K::PanelWarnings), false)),
+        rows[1],
+    );
+}
+
 fn draw_prose(
     f: &mut ratatui::Frame,
     app: &App,
@@ -1058,6 +1200,7 @@ fn draw(f: &mut ratatui::Frame, app: &App) {
         Screen::Home => draw_home(f, app, body),
         Screen::Generate => draw_generate(f, app, body),
         Screen::Servers => app.servers.draw(f, body, app.lang, app.scroll),
+        Screen::Check => draw_check(f, app, body),
         Screen::Deploy => draw_prose(
             f,
             app,
@@ -1190,6 +1333,37 @@ mod tests {
             screen.contains("format"),
             "the selected last field scrolled into view"
         );
+    }
+
+    #[test]
+    fn the_check_screen_takes_typing_and_checks_a_file() {
+        use ratatui::backend::TestBackend;
+        let path = std::env::temp_dir().join(format!("awg-tui-check-{}.conf", std::process::id()));
+        std::fs::write(&path, "Jc = 4\nJmin = 40\nJmax = 30\nS1 = 20\nS2 = 30\n").unwrap();
+
+        let mut a = app();
+        a.push(Screen::Check);
+        for c in path.to_string_lossy().chars() {
+            a.on_key(KeyCode::Char(c));
+        }
+        // Letters are input here: q types a q rather than quitting.
+        a.on_key(KeyCode::Char('q'));
+        assert!(!a.quit);
+        a.on_key(KeyCode::Backspace);
+        a.on_key(KeyCode::Enter);
+        let r = a.check_report.as_ref().expect("a report");
+        assert!(
+            r.findings.iter().any(|f| f.code == "j.inverted"),
+            "{:?}",
+            r.findings
+        );
+
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| draw(f, &a)).unwrap();
+
+        a.on_key(KeyCode::Esc);
+        assert_eq!(a.screen(), Screen::Home);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
