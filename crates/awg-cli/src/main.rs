@@ -64,7 +64,7 @@ fn main() {
 /// Every flag that consumes the argument after it. Needed in exactly one place
 /// — working out which word is the command — but wrong here means a flag's
 /// value gets run as a subcommand.
-const VALUE_FLAGS: [&str; 20] = [
+const VALUE_FLAGS: &[&str] = &[
     "--version",
     "--profile",
     "--client",
@@ -85,6 +85,11 @@ const VALUE_FLAGS: [&str; 20] = [
     "--endpoint",
     "--name",
     "--image",
+    "--client-release",
+    "--server-engine",
+    "--region",
+    "--whitelisted",
+    "--role",
 ];
 
 /// The first word that is neither a flag nor a flag's value.
@@ -591,6 +596,19 @@ mod tests {
         // against a server literally named "status".
         assert_eq!(command_of(&a(&["--host", "status"])), None);
         assert_eq!(command_of(&a(&["--client", "gen"])), None);
+    }
+
+    #[test]
+    fn the_generator_value_flags_are_skipped() {
+        for flag in [
+            "--client-release",
+            "--server-engine",
+            "--region",
+            "--whitelisted",
+            "--role",
+        ] {
+            assert_eq!(command_of(&a(&[flag, "x", "gen"])), Some("gen"), "{flag}");
+        }
     }
 
     #[test]
