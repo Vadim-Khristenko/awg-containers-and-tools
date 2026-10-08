@@ -338,16 +338,9 @@ pub const CLIENTS: [ClientCapability; 14] = [
         Engine::Go,
         &[GO_NO_TAG_C],
     ),
-    ClientCapability {
-        max_h_value: INT32_MAX,
-        ..on(
-            "amneziawg-windows",
-            "AmneziaWG Windows",
-            &["Windows 10+"],
-            Engine::Go,
-            &["H-value cap at INT32_MAX (issue #85)", GO_NO_TAG_C],
-        )
-    },
+    // v2.0.2 raised the editor's H bound to the full uint32 (PR #87, commit
+    // c9740b17). The older builds are in CLIENT_RELEASES.
+    WINDOWS,
     on(
         "amneziavpn",
         "Amnezia VPN",
@@ -489,6 +482,61 @@ pub fn client(id: &str) -> Option<&'static ClientCapability> {
 
 pub fn default_client() -> &'static ClientCapability {
     client(DEFAULT_CLIENT_ID).expect("the default client is in the matrix")
+}
+
+const WINDOWS: ClientCapability = on(
+    "amneziawg-windows",
+    "AmneziaWG Windows",
+    &["Windows 10+"],
+    Engine::Go,
+    &[GO_NO_TAG_C],
+);
+
+/// An older build of a client whose limits differ from the current one.
+///
+/// A client is not one set of limits forever: AmneziaWG for Windows refused H
+/// values above 2^31-1 until v2.0.2 and takes the full range after it. One
+/// row could only describe one of those, so it described the broken one for
+/// everybody, including people on a current build. `CLIENTS` is the current
+/// build; a release here is that row corrected downward, so adding one never
+/// changes what someone who installed the client today gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientRelease {
+    pub client_id: &'static str,
+    /// Shell-safe, for `--client-release`.
+    pub id: &'static str,
+    pub label: &'static str,
+    pub caps: ClientCapability,
+}
+
+pub const CLIENT_RELEASES: [ClientRelease; 1] = [ClientRelease {
+    client_id: "amneziawg-windows",
+    id: "pre-2.0.2",
+    label: "up to 2.0.2",
+    caps: ClientCapability {
+        max_h_value: INT32_MAX,
+        known_issues: &[
+            "Before 2.0.2 the editor will not save H values above 2147483647 (PR #85, \
+             fixed in #87). The server takes them fine; the limit was the client's own check.",
+            GO_NO_TAG_C,
+        ],
+        ..WINDOWS
+    },
+}];
+
+/// The older builds of a client, newest first.
+pub fn releases_of(client_id: &str) -> impl Iterator<Item = &'static ClientRelease> + '_ {
+    let id = client_id.trim();
+    CLIENT_RELEASES.iter().filter(move |r| r.client_id == id)
+}
+
+/// A client's limits for one of its builds; `None` as the release means the
+/// current build. `None` back means the client or the release is unknown.
+pub fn client_release(id: &str, release: Option<&str>) -> Option<&'static ClientCapability> {
+    match release.map(str::trim) {
+        None | Some("" | "current") => client(id),
+        Some(r) => releases_of(id).find(|x| x.id == r).map(|x| &x.caps),
+    }
 }
 
 // -------------------------------------------------------------- validation
@@ -1221,7 +1269,7 @@ pub fn validate_for(
                     client.name,
                     client.max_h_value,
                     if client.max_h_value == INT32_MAX {
-                        " (INT32_MAX — issue #85)"
+                        " (INT32_MAX, issue #85)"
                     } else {
                         ""
                     }
@@ -1689,7 +1737,7 @@ mod tests {
         hi[2] = 3_000_100_000;
         hi[3] = 450;
 
-        let win = client("amneziawg-windows").unwrap();
+        let win = client_release("amneziawg-windows", Some("pre-2.0.2")).unwrap();
         let found: Vec<_> = validate_for_client(&p, win)
             .into_iter()
             .filter(|v| v.code == "client.h_cap")
@@ -1711,7 +1759,7 @@ mod tests {
 
     #[test]
     fn generation_for_windows_never_trips_its_own_cap() {
-        let win = client("amneziawg-windows").unwrap();
+        let win = client_release("amneziawg-windows", Some("pre-2.0.2")).unwrap();
         for seed in 0..300u64 {
             let p = generate(
                 &mut SeededRng::new(seed),
@@ -2360,7 +2408,7 @@ mod tests {
             assert!(c.max_s4 <= MAX_S4);
             assert!(c.max_h_value == UINT32_MAX || c.max_h_value == INT32_MAX);
         }
-        assert_eq!(client("amneziawg-windows").unwrap().max_h_value, INT32_MAX);
+        assert_eq!(client("amneziawg-windows").unwrap().max_h_value, UINT32_MAX);
         assert_eq!(client("wg-easy").unwrap().max_h_value, INT32_MAX);
         assert_eq!(client("keenetic-native").unwrap().max_jc, 128);
         assert!(!client("wiresock").unwrap().supports_i1_i5);
@@ -2392,6 +2440,55 @@ mod tests {
         }
         assert_eq!(default_client().id, DEFAULT_CLIENT_ID);
         assert!(client("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn an_older_build_is_the_current_one_corrected_downward() {
+        let now = client("amneziawg-windows").unwrap();
+        let old = client_release("amneziawg-windows", Some("pre-2.0.2")).unwrap();
+        assert_eq!(now.max_h_value, UINT32_MAX);
+        assert_eq!(old.max_h_value, INT32_MAX);
+        // Only what the release states differs.
+        assert_eq!(old.engine, now.engine);
+        assert_eq!(old.max_jc, now.max_jc);
+        assert_eq!(old.id, now.id);
+
+        assert_eq!(client_release("amneziawg-windows", None), Some(now));
+        assert_eq!(
+            client_release("amneziawg-windows", Some("current")),
+            Some(now)
+        );
+        assert!(client_release("amneziawg-windows", Some("1.0.0")).is_none());
+        assert!(client_release("amneziavpn", Some("pre-2.0.2")).is_none());
+        assert_eq!(releases_of("amneziawg-windows").count(), 1);
+        for r in &CLIENT_RELEASES {
+            assert!(client(r.client_id).is_some(), "{} names no client", r.id);
+            assert!(
+                !r.id.contains(['<', '>', ' ']),
+                "{} is not shell-safe",
+                r.id
+            );
+        }
+    }
+
+    #[test]
+    fn the_current_windows_build_is_generated_across_the_full_range() {
+        // The point of the release axis: someone on a current build is no
+        // longer squeezed under a cap their client dropped.
+        let now = client("amneziawg-windows").unwrap();
+        let reaches_past = (0..60u64).any(|seed| {
+            let p = generate(
+                &mut SeededRng::new(seed),
+                &GenOptions {
+                    version: AwgVersion::V3_0,
+                    client: now,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            (0..4).any(|i| p.h_range(i).hi > INT32_MAX)
+        });
+        assert!(reaches_past);
     }
 
     #[test]

@@ -163,6 +163,10 @@ fn usage(lang: Lang) {
     println!("  --version 3.1        {}", t(lang, K::OptVersion));
     println!("  --profile quic       {}", t(lang, K::OptProfile));
     println!("  --client amneziavpn  {}", t(lang, K::OptClient));
+    println!(
+        "  --client-release pre-2.0.2  {}",
+        t(lang, K::OptClientRelease)
+    );
     println!("  --server-engine go   {}", t(lang, K::OptServerEngine));
     println!("  --uapi               {}", t(lang, K::OptUapi));
     println!("  --json               {}", t(lang, K::OptJson));
@@ -231,6 +235,18 @@ fn cmd_gen(args: &[String], lang: Lang) {
             None => {
                 let valid: Vec<&str> = versions::CLIENTS.iter().map(|c| c.id).collect();
                 bail(lang, K::ErrUnknownClient, &raw, &valid);
+            }
+        },
+    };
+    // An older build of that client, when it differs from the current one.
+    let client = match flag_value(args, "--client-release") {
+        None => client,
+        Some(raw) => match versions::client_release(client.id, Some(&raw)) {
+            Some(c) => c,
+            None => {
+                let mut valid = vec!["current"];
+                valid.extend(versions::releases_of(client.id).map(|r| r.id));
+                bail(lang, K::ErrUnknownRelease, &raw, &valid);
             }
         },
     };
@@ -407,6 +423,12 @@ fn cmd_clients(lang: Lang) {
         println!("      tags (2.0+): {}", tags.join(" "));
         for issue in c.known_issues {
             println!("      ! {issue}");
+        }
+        for r in versions::releases_of(c.id) {
+            println!(
+                "      --client-release {} ({}): maxH={} maxJc={}",
+                r.id, r.label, r.caps.max_h_value, r.caps.max_jc
+            );
         }
     }
     println!();

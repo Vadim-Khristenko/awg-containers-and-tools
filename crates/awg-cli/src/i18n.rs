@@ -141,6 +141,10 @@ strings! {
         "accepted for old scripts; <c> is now used wherever both engines parse it",
         "оставлен для старых скриптов: <c> теперь ставится везде, где его парсят оба движка"
     ),
+    OptClientRelease => (
+        "an older build of the client whose limits differ (see `awg-tool clients`)",
+        "старая сборка клиента с другими ограничениями (см. `awg-tool clients`)"
+    ),
     OptServerEngine => (
         "what parses I1-I5 on the server: go (default, these images) | kmod | awg-quick | kmod-bsd | unverified",
         "что разбирает I1-I5 на сервере: go (по умолчанию, эти образы) | kmod | awg-quick | kmod-bsd | unverified"
@@ -167,6 +171,7 @@ strings! {
     ErrUnknownProfile => ("unknown mimicry profile", "неизвестный профиль мимикрии"),
     ErrUnknownClient => ("unknown client", "неизвестный клиент"),
     ErrUnknownEngine => ("unknown engine", "неизвестный движок"),
+    ErrUnknownRelease => ("unknown release of this client", "у этого клиента нет такой сборки"),
     ErrUnknownBrowser => ("unknown browser profile", "неизвестный профиль браузера"),
     ErrBadMtu => ("MTU out of range", "MTU вне допустимого диапазона"),
     // ── talking to a server ─────────────────────────────────────────────
