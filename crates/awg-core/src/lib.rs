@@ -11,6 +11,7 @@ pub mod deploy;
 pub mod engines;
 pub mod mimic;
 pub mod platform;
+pub mod presets;
 pub mod profile;
 pub mod render;
 pub mod rng;

@@ -31,6 +31,7 @@ use crate::deploy::config::{
 };
 use crate::engines::{self, Engine};
 use crate::mimic::{self, Chain, MimicOptions, MimicProfile, TagKind};
+use crate::presets::DISABLED_HEADERS;
 use crate::render::{awg3_conf_lines, awg3_uapi_lines};
 use crate::rng::Rng;
 use crate::{Error, Result};
@@ -728,6 +729,7 @@ pub struct BaseCtx<'a> {
     pub extreme: bool,
     pub junk_level: u8,
     pub narrow_h: bool,
+    pub same_s: bool,
     pub client_max_h: u32,
     pub client_max_jc: u32,
     pub client_max_s4: u32,
@@ -861,6 +863,15 @@ pub struct GenOptions {
     pub junk_level: u8,
     /// 3.1 only: narrow H ranges to ~20k as a CPU workaround. Ignored elsewhere.
     pub narrow_h: bool,
+    /// 3.1 with header protection and trailers: one S value for S1-S4
+    /// ("Unite S1-S4"). The tool does not recommend it, since one value
+    /// shared by everyone who followed the advice is a fingerprint naming the
+    /// advice, but it is there for whoever wants exactly that.
+    pub same_s: bool,
+    /// 3.1 with header protection and trailers: write H1-H4 as the standard
+    /// 1, 2, 3, 4. Under the cipher the ranges hide nothing; under trailers
+    /// their width is lost packets.
+    pub disable_h: bool,
 }
 
 impl Default for GenOptions {
@@ -881,6 +892,8 @@ impl Default for GenOptions {
             extreme: false,
             junk_level: 5,
             narrow_h: false,
+            same_s: false,
+            disable_h: false,
         }
     }
 }
@@ -1017,6 +1030,29 @@ fn draw_sizes(rng: &mut impl Rng, ctx: &BaseCtx<'_>) -> [u32; 4] {
     let s3_max = if ctx.extreme { S3_MAX_EXTREME } else { S3_MAX };
     let max_s4 = MAX_S4.min(ctx.client_max_s4);
 
+    // One value for every size. Equal paddings cannot collide, since the
+    // message bases (148, 92, 64) differ. The single draw honours every bound
+    // the separate draws do: S4 and the client's ceiling, the router cap, and
+    // the nonce floor under header protection.
+    if ctx.same_s {
+        let ceiling = if ctx.version.supports_s3_s4() {
+            max_s4.min(s_max)
+        } else {
+            s_max
+        };
+        let lo = if ctx.header_protection {
+            MIN_S_WITH_HEADER_PROTECTION
+        } else {
+            1
+        };
+        let v = if lo > ceiling {
+            ceiling
+        } else {
+            rng.range(lo, ceiling)
+        };
+        return [v; 4];
+    }
+
     let mut s1 = rng.range(1, s_max);
     let mut s2 = rng.range(1, s_max);
     let mut s3 = if ctx.extreme {
@@ -1093,6 +1129,7 @@ pub fn generate(rng: &mut impl Rng, opts: &GenOptions) -> Result<VersionedParams
         // Under RandomTrailers a wide H1-H3 is nothing but lost packets (see
         // trailer_loss), so the trailers bring the narrow windows with them.
         narrow_h: opts.version == AwgVersion::V3_1 && (opts.narrow_h || opts.random_trailers),
+        same_s: opts.same_s && crate::presets::linked_switches_on(opts),
         client_max_h: client.max_h_value,
         client_max_jc: client.max_jc,
         client_max_s4: client.max_s4,
@@ -1130,6 +1167,15 @@ pub fn generate(rng: &mut impl Rng, opts: &GenOptions) -> Result<VersionedParams
         }
         hi
     });
+    // Disabled headers: the standard 1-4, as Amnezia VPN writes them. Gated
+    // here rather than trusted to the caller, because 1-4 without header
+    // protection would put WireGuard's own type bytes on the wire in the clear.
+    let h_hi = if opts.disable_h && crate::presets::linked_switches_on(opts) {
+        base.h = DISABLED_HEADERS;
+        Some(DISABLED_HEADERS)
+    } else {
+        h_hi
+    };
 
     let chains = if opts.version.supports_cps() && client.supports_i1_i5 {
         // A tag either end does not implement is not a smaller packet, it is a
@@ -1285,6 +1331,14 @@ pub fn validate_for(
     let v = params.version;
 
     // ---- magic headers
+    // With HeaderProtectionKey the type field leaves encrypted, and 1-4 is what
+    // Amnezia VPN itself writes for its 3.x containers: the reserved zone is a
+    // problem only where the headers are visible.
+    let headers_protected = v.supports_awg3()
+        && params
+            .awg3
+            .as_ref()
+            .is_some_and(|p| p.header_protection_key.is_some());
     let ranges: [UintRange; 4] = [
         params.h_range(0),
         params.h_range(1),
@@ -1308,7 +1362,7 @@ pub fn validate_for(
                 ));
             }
         }
-        if (1..=4).contains(&ranges[i].lo) {
+        if !headers_protected && (1..=4).contains(&ranges[i].lo) {
             out.push(Violation::warn(
                 format!("H{}", i + 1),
                 "h.reserved",
@@ -2726,6 +2780,76 @@ mod tests {
             )
             .unwrap();
             assert!(trailer_loss(&p).unwrap() <= TRAILER_LOSS_MAX, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn three_one_with_its_preset_writes_plain_protected_headers() {
+        for c in CLIENTS.iter() {
+            for seed in 0..20u64 {
+                let opts = GenOptions {
+                    client: c,
+                    ..GenOptions::for_version(AwgVersion::V3_1)
+                };
+                let p = generate(&mut SeededRng::new(seed), &opts).unwrap();
+                for i in 0..4 {
+                    assert_eq!(p.h_range(i), UintRange::new(i as u32 + 1, i as u32 + 1));
+                }
+                assert!(p.awg3.as_ref().unwrap().header_protection_key.is_some());
+                let found = validate_for_client(&p, c);
+                assert!(
+                    found.iter().all(|x| x.level != Level::Error),
+                    "{}: {found:?}",
+                    c.id
+                );
+                assert!(
+                    found
+                        .iter()
+                        .all(|x| x.code != "h.reserved" && x.code != "h.width_loss")
+                );
+                assert!(p.conf_lines().iter().any(|l| l == "H1 = 1"));
+            }
+        }
+    }
+
+    #[test]
+    fn the_linked_switches_do_nothing_without_their_parents() {
+        for (version, trailers, protection) in [
+            (AwgVersion::V3_1, false, true),
+            (AwgVersion::V3_1, true, false),
+            (AwgVersion::V3_0, true, true),
+        ] {
+            let opts = GenOptions {
+                version,
+                random_trailers: trailers,
+                header_protection: protection,
+                disable_h: true,
+                same_s: true,
+                ..Default::default()
+            };
+            let p = generate(&mut SeededRng::new(7), &opts).unwrap();
+            assert!(
+                p.base.h.iter().all(|h| *h > 4),
+                "{version} {trailers} {protection}"
+            );
+        }
+    }
+
+    #[test]
+    fn unite_s_draws_one_value_inside_every_bound() {
+        for c in CLIENTS.iter() {
+            for seed in 0..40u64 {
+                let opts = GenOptions {
+                    client: c,
+                    same_s: true,
+                    ..GenOptions::for_version(AwgVersion::V3_1)
+                };
+                let p = generate(&mut SeededRng::new(seed), &opts).unwrap();
+                let s = p.base.s;
+                assert!(s.iter().all(|v| *v == s[0]), "{s:?}");
+                assert!(s[0] >= MIN_S_WITH_HEADER_PROTECTION);
+                assert!(s[0] <= MAX_S4.min(c.max_s4));
+            }
         }
     }
 

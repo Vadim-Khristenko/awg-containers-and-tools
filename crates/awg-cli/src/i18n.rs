@@ -76,9 +76,42 @@ strings! {
     OptUapi => ("emit UAPI lines instead of .conf", "вывести строки UAPI вместо .conf"),
     OptJson => ("emit the config as JSON, for scripts", "выдать конфиг в JSON — для скриптов"),
     OptOut => ("write the result to a file instead of stdout", "записать результат в файл вместо stdout"),
+    OptSwitchesNote => (
+        "switches start from the version's preset; each takes on|off (alone means on)",
+        "переключатели стартуют с пресета версии; каждый принимает on|off (без значения значит on)"
+    ),
+    OptHeaderProtection => (
+        "3.x: HeaderProtectionKey, written into both ends (on for 3.0 and 3.1)",
+        "3.x: HeaderProtectionKey, пишется в оба конца (на 3.0 и 3.1 включён)"
+    ),
+    OptContentPadding => (
+        "3.x: ContentPaddingAddition, extra random transport padding",
+        "3.x: ContentPaddingAddition, дополнительный случайный паддинг транспорта"
+    ),
+    OptRandomTimings => (
+        "3.x: randomised protocol timers instead of WireGuard's constants",
+        "3.x: случайные таймеры протокола вместо констант WireGuard"
+    ),
+    OptSameS => (
+        "3.1 with protection and trailers: one value for S1-S4 (not recommended: a shared value is a fingerprint)",
+        "3.1 с защитой и хвостами: одно значение для S1-S4 (не рекомендуется: общее значение это отпечаток)"
+    ),
+    OptDisableH => (
+        "3.1 with protection and trailers: H1-H4 as 1, 2, 3, 4 (on by default on 3.1)",
+        "3.1 с защитой и хвостами: H1-H4 как 1, 2, 3, 4 (на 3.1 включено по умолчанию)"
+    ),
+    OptTags => (
+        "turn a chain tag kind off (or back on); the engines still decide what is allowed",
+        "выключить (или включить) вид тега в цепочках; что допустимо, всё равно решают движки"
+    ),
+    OptAttempt => (
+        "failed attempts so far; past 3 everything is generated one notch stronger",
+        "сколько попыток уже не прошло; после 3 всё генерируется на ступень сильнее"
+    ),
+    ErrBadAttempt => ("--attempt out of range", "--attempt вне допустимого диапазона"),
     OptRandomTrailers => (
-        "3.1: a random-length trailer on every outgoing packet",
-        "3.1: случайный по длине хвост у каждого исходящего пакета"
+        "3.1: a random-length trailer on every outgoing packet (on by default on 3.1, with MTU 1280)",
+        "3.1: случайный по длине хвост у каждого исходящего пакета (на 3.1 включён, MTU 1280)"
     ),
     OptDisableCookies => (
         "3.1: never send cookie replies (breaks NAT keepalive under load)",

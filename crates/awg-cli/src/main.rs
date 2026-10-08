@@ -70,7 +70,6 @@ const VALUE_FLAGS: &[&str] = &[
     "--client",
     "--intensity",
     "--junk",
-    "--narrow-h",
     "--container",
     "--mtu",
     "--host",
@@ -90,6 +89,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--region",
     "--whitelisted",
     "--role",
+    "--attempt",
 ];
 
 /// The first word that is neither a flag nor a flag's value.
@@ -101,6 +101,9 @@ fn command_of(args: &[String]) -> Option<&str> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if VALUE_FLAGS.contains(&a.as_str()) {
+            it.next();
+        } else if a.starts_with("--") && it.clone().next().is_some_and(|v| is_switch_word(v)) {
+            // `--random-trailers off`: the word after a switch is its value.
             it.next();
         } else if !a.starts_with('-') {
             return Some(a.as_str());
@@ -121,6 +124,26 @@ fn flag_value(args: &[String], name: &str) -> Option<String> {
 
 fn has_flag(args: &[String], name: &str) -> bool {
     args.iter().any(|a| a == name)
+}
+
+/// The words a switch takes after it.
+fn is_switch_word(v: &str) -> bool {
+    matches!(
+        v.to_ascii_lowercase().as_str(),
+        "on" | "off" | "yes" | "no" | "true" | "false" | "1" | "0"
+    )
+}
+
+/// An on/off switch: absent means `default`, present alone means on, and
+/// `on|off`, `yes|no`, `true|false`, `1|0` after it say which.
+fn switch(args: &[String], name: &str, default: bool) -> bool {
+    let Some(i) = args.iter().position(|a| a == name) else {
+        return default;
+    };
+    !matches!(
+        args.get(i + 1).map(|v| v.to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
 }
 
 /// Is there a real terminal on both ends?
@@ -193,8 +216,16 @@ fn usage(lang: Lang) {
     println!("  --browser chrome     {}", t(lang, K::OptBrowser));
     println!("  --mimic-all          {}", t(lang, K::OptMimicAll));
     println!("  --tag-c              {}", t(lang, K::OptTagC));
+    println!("  {}", t(lang, K::OptSwitchesNote));
+    println!("  --header-protection  {}", t(lang, K::OptHeaderProtection));
+    println!("  --content-padding    {}", t(lang, K::OptContentPadding));
+    println!("  --random-timings     {}", t(lang, K::OptRandomTimings));
     println!("  --random-trailers    {}", t(lang, K::OptRandomTrailers));
     println!("  --disable-cookies    {}", t(lang, K::OptDisableCookies));
+    println!("  --same-s             {}", t(lang, K::OptSameS));
+    println!("  --disable-h          {}", t(lang, K::OptDisableH));
+    println!("  --tag-t/-r/-rc/-rd off  {}", t(lang, K::OptTags));
+    println!("  --attempt 4          {}", t(lang, K::OptAttempt));
     println!("  --lang en|ru         {}", t(lang, K::OptLang));
     println!();
     println!("{}:", t(lang, K::UsageServerFlags));
@@ -294,8 +325,12 @@ fn cmd_gen(args: &[String], lang: Lang) {
         _ => Intensity::Medium,
     };
 
+    // The version's preset is the starting point, as Architect applies it when
+    // the version changes; every switch below can still be turned either way.
+    let preset = GenOptions::for_version(version);
+
     let mtu = match flag_value(args, "--mtu") {
-        None => 1500,
+        None => preset.mimic.mtu,
         Some(raw) => match raw.parse::<u32>() {
             // Below the IPv4 minimum reassembly buffer there is no room for a
             // chain at all, and above 9000 nothing on the path will carry it.
@@ -312,13 +347,15 @@ fn cmd_gen(args: &[String], lang: Lang) {
             _ => bail(lang, K::ErrBadJunk, raw, &["0..32"]),
         },
     };
-    let extreme = has_flag(args, "--extreme");
-    let narrow_h = match flag_value(args, "--narrow-h").as_deref() {
-        // Architect's default: harmless everywhere, a CPU fix on 3.1.
-        None => version == AwgVersion::V3_1,
-        Some("0" | "false" | "off" | "no") => false,
-        Some(_) => true,
+    let iter_count = match flag_value(args, "--attempt").as_deref() {
+        None => 0,
+        Some(raw) => match raw.parse::<u32>() {
+            Ok(n) if n <= 100 => n,
+            _ => bail(lang, K::ErrBadAttempt, raw, &["0..100"]),
+        },
     };
+    let extreme = has_flag(args, "--extreme");
+    let defaults = MimicOptions::default();
     let opts = GenOptions {
         version,
         profile,
@@ -328,12 +365,19 @@ fn cmd_gen(args: &[String], lang: Lang) {
         router_mode,
         extreme,
         junk_level,
-        narrow_h,
-        // The 3.1 switches. Both default off, and the capability gate inside
-        // generate() eats them on anything older than 3.1 — a flag on a 3.0
-        // run is silently a no-op rather than a config the device refuses.
-        random_trailers: has_flag(args, "--random-trailers"),
-        disable_cookies: has_flag(args, "--disable-cookies"),
+        // The 3.x switches. The capability gates inside generate() eat them
+        // on versions that do not read them, so a switch on an older version
+        // is a no-op rather than a config the device refuses.
+        header_protection: switch(args, "--header-protection", preset.header_protection),
+        content_padding: switch(args, "--content-padding", preset.content_padding),
+        random_timings: switch(args, "--random-timings", preset.random_timings),
+        random_trailers: switch(args, "--random-trailers", preset.random_trailers),
+        disable_cookies: switch(args, "--disable-cookies", preset.disable_cookies),
+        // Narrow H was the CLI's own 3.1 default before presets; it stays,
+        // since it costs nothing and the trailers force it anyway.
+        narrow_h: switch(args, "--narrow-h", version == AwgVersion::V3_1),
+        same_s: switch(args, "--same-s", preset.same_s),
+        disable_h: switch(args, "--disable-h", preset.disable_h),
         mimic: MimicOptions {
             mtu,
             mimic_all: has_flag(args, "--mimic-all"),
@@ -343,11 +387,15 @@ fn cmd_gen(args: &[String], lang: Lang) {
             // Kept so old scripts still parse; generate() decides <c> from the
             // engines on both ends.
             tag_c: has_flag(args, "--tag-c"),
+            tag_t: switch(args, "--tag-t", defaults.tag_t),
+            tag_r: switch(args, "--tag-r", defaults.tag_r),
+            tag_rc: switch(args, "--tag-rc", defaults.tag_rc),
+            tag_rd: switch(args, "--tag-rd", defaults.tag_rd),
             browser,
             router_mode,
-            ..Default::default()
+            iter_count,
+            ..defaults
         },
-        ..Default::default()
     };
 
     let params = match versions::generate(&mut SecureRng, &opts) {
@@ -609,6 +657,34 @@ mod tests {
         ] {
             assert_eq!(command_of(&a(&[flag, "x", "gen"])), Some("gen"), "{flag}");
         }
+    }
+
+    #[test]
+    fn a_switch_word_is_skipped_and_never_the_command() {
+        assert_eq!(command_of(&a(&["--attempt", "4", "gen"])), Some("gen"));
+        assert_eq!(command_of(&a(&["--disable-h", "off", "gen"])), Some("gen"));
+        assert_eq!(command_of(&a(&["--mimic-all", "gen"])), Some("gen"));
+    }
+
+    #[test]
+    fn a_switch_reads_its_word_or_stands_for_on() {
+        let args = a(&[
+            "gen",
+            "--same-s",
+            "--disable-h",
+            "off",
+            "--tag-rc",
+            "no",
+            "--uapi",
+        ]);
+        assert!(switch(&args, "--same-s", false));
+        assert!(!switch(&args, "--disable-h", true));
+        assert!(!switch(&args, "--tag-rc", true));
+        assert!(
+            switch(&args, "--random-trailers", true),
+            "absent keeps the default"
+        );
+        assert!(!switch(&args, "--random-trailers", false));
     }
 
     #[test]
