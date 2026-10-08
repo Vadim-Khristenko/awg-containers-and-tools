@@ -428,6 +428,18 @@ pub fn generate_chain_set(
     out
 }
 
+/// One entropy packet for chain slot `slot` (1 for I2, up to 4 for I5): what a
+/// trailing slot falls back to when the set has to shrink.
+pub fn entropy_chain(
+    rng: &mut impl Rng,
+    intensity: Intensity,
+    opts: &MimicOptions,
+    slot: usize,
+) -> String {
+    let iv = intensity_value(intensity, opts.iter_count);
+    profiles::entropy(rng, opts, slot as u32, iv).render()
+}
+
 /// Build I1–I5 as the strings a `.conf` carries.
 pub fn generate_chains(
     rng: &mut impl Rng,

@@ -25,6 +25,7 @@
 use crate::awg3::{
     self, Awg3Options, Awg3Params, Intensity, MIN_S_WITH_HEADER_PROTECTION, UintRange,
 };
+use crate::chain_budget::{self, KMOD_CHAIN_BUDGET};
 use crate::deploy::config::{
     BaseObfuscation, MAX_S4, MESSAGE_COOKIE_SIZE, MESSAGE_INITIATION_SIZE, MESSAGE_RESPONSE_SIZE,
 };
@@ -1147,11 +1148,14 @@ pub fn generate(rng: &mut impl Rng, opts: &GenOptions) -> Result<VersionedParams
             router_mode: opts.router_mode,
             ..opts.mimic.clone()
         };
-        Some(mimic::generate_chains(
-            rng,
-            opts.profile,
-            opts.intensity,
-            &mimic,
+        let chains = mimic::generate_chains(rng, opts.profile, opts.intensity, &mimic);
+        // Kept inside the kernel module's netlink budget whichever engines were
+        // named: the same block goes on the server, and a Linux server running
+        // awg-quick on the module is the common case elsewhere.
+        Some(chain_budget::fit(
+            chains,
+            |slot| mimic::entropy_chain(rng, opts.intensity, &mimic, slot),
+            KMOD_CHAIN_BUDGET,
         ))
     } else {
         None
@@ -1460,6 +1464,24 @@ pub fn validate_for(
                         );
                     }
                 }
+            }
+
+            // amneziawg-go has no budget to speak of; the kernel module carries
+            // I1-I5 in one netlink page and answers "Message too long" past it.
+            let total = chain_budget::chain_bytes(chains);
+            if total > KMOD_CHAIN_BUDGET {
+                let on_kmod = [client.engine, server_engine]
+                    .iter()
+                    .any(|e| matches!(e, Engine::Kmod | Engine::AwgQuick));
+                let message = format!(
+                    "I1-I5 take {total} netlink bytes; the kernel module carries at most \
+                     {KMOD_CHAIN_BUDGET} and `awg show` answers \"Message too long\" past it"
+                );
+                out.push(if on_kmod {
+                    Violation::err("I1-I5", "chain.kmod_budget", message)
+                } else {
+                    Violation::warn("I1-I5", "chain.kmod_budget", message)
+                });
             }
         }
         None => {
@@ -2440,6 +2462,60 @@ mod tests {
         }
         assert_eq!(default_client().id, DEFAULT_CLIENT_ID);
         assert!(client("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn every_profile_stays_inside_the_kernel_module_budget() {
+        // Issue #17: the chains go on the server too, so this holds whatever
+        // client was named.
+        for profile in MimicProfile::ALL {
+            for intensity in [Intensity::Low, Intensity::Medium, Intensity::High] {
+                for seed in 0..15u64 {
+                    let p = generate(
+                        &mut SeededRng::new(seed),
+                        &GenOptions {
+                            version: AwgVersion::V2_0,
+                            profile,
+                            intensity,
+                            client: client("awg-kmod").unwrap(),
+                            mimic: MimicOptions {
+                                mimic_all: true,
+                                iter_count: 5,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                    let chains = p.chains.as_ref().unwrap();
+                    assert!(
+                        chain_budget::chain_bytes(chains) <= KMOD_CHAIN_BUDGET,
+                        "{} {intensity:?} seed {seed}",
+                        profile.id()
+                    );
+                    assert!(!chains[0].is_empty(), "I1 was dropped");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_oversized_set_is_an_error_where_the_module_reads_it() {
+        let mut p = make(AwgVersion::V3_0, 5);
+        let big = format!("<b 0x{}>", "ab".repeat(700));
+        for c in p.chains.as_mut().unwrap().iter_mut() {
+            *c = big.clone();
+        }
+        let level_on = |client_id: &str, server: Engine| {
+            validate_for(&p, client(client_id).unwrap(), server)
+                .into_iter()
+                .find(|x| x.code == "chain.kmod_budget")
+                .map(|x| x.level)
+        };
+        assert_eq!(level_on("amneziavpn", Engine::Go), Some(Level::Warn));
+        assert_eq!(level_on("amneziavpn", Engine::Kmod), Some(Level::Error));
+        assert_eq!(level_on("openwrt", Engine::Go), Some(Level::Error));
+        assert_eq!(level_on("wg-easy", Engine::Go), Some(Level::Error));
     }
 
     #[test]

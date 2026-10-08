@@ -6,6 +6,7 @@
 //! valid in one place is valid in all of them.
 
 pub mod awg3;
+pub mod chain_budget;
 pub mod deploy;
 pub mod engines;
 pub mod mimic;
