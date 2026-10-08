@@ -90,6 +90,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--whitelisted",
     "--role",
     "--attempt",
+    "--mimic-host",
 ];
 
 /// The first word that is neither a flag nor a flag's value.
@@ -184,7 +185,9 @@ fn usage(lang: Lang) {
     println!("      {}", t(lang, K::CmdLogs));
     println!("  awg-tool update");
     println!("      {}", t(lang, K::CmdUpdate));
-    println!("  awg-tool install");
+    println!(
+        "  awg-tool install [--version 3.1] [any gen option; --mimic-host for the mimicry name]"
+    );
     println!("      {}", t(lang, K::CmdInstall));
     println!("  awg-tool donate");
     println!("      {}", t(lang, K::CmdDonate));
@@ -253,7 +256,9 @@ fn bail(lang: Lang, key: K, given: &str, valid: &[&str]) -> ! {
     std::process::exit(2);
 }
 
-fn cmd_gen(args: &[String], lang: Lang) {
+/// Everything `gen` and `install` share: the version, its preset, and every
+/// knob of the generator, read off the command line.
+pub(crate) fn gen_options(args: &[String], lang: Lang) -> GenOptions {
     let raw_version = flag_value(args, "--version").unwrap_or_else(|| "3.0".into());
     let Some(version) = AwgVersion::parse(&raw_version) else {
         let valid: Vec<&str> = AwgVersion::ALL.iter().map(|v| v.as_str()).collect();
@@ -356,7 +361,7 @@ fn cmd_gen(args: &[String], lang: Lang) {
     };
     let extreme = has_flag(args, "--extreme");
     let defaults = MimicOptions::default();
-    let opts = GenOptions {
+    GenOptions {
         version,
         profile,
         intensity,
@@ -381,7 +386,7 @@ fn cmd_gen(args: &[String], lang: Lang) {
         mimic: MimicOptions {
             mtu,
             mimic_all: has_flag(args, "--mimic-all"),
-            custom_host: flag_value(args, "--host"),
+            custom_host: flag_value(args, "--mimic-host").or_else(|| flag_value(args, "--host")),
             region,
             whitelisted_in,
             // Kept so old scripts still parse; generate() decides <c> from the
@@ -396,7 +401,13 @@ fn cmd_gen(args: &[String], lang: Lang) {
             iter_count,
             ..defaults
         },
-    };
+    }
+}
+
+fn cmd_gen(args: &[String], lang: Lang) {
+    let opts = gen_options(args, lang);
+    let (client, server_engine) = (opts.client, opts.server_engine);
+    let (version, profile) = (opts.version, opts.profile);
 
     let params = match versions::generate(&mut SecureRng, &opts) {
         Ok(p) => p,

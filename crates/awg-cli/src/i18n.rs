@@ -181,8 +181,8 @@ strings! {
     ),
     OptMtu => ("path MTU the junk packets must fit into", "MTU пути, в который должны влезть мусорные пакеты"),
     OptHost => (
-        "host name to imitate instead of one from the built-in pools",
-        "имя хоста для мимикрии вместо выбранного из встроенных списков"
+        "host name to imitate instead of one from the host database (`--mimic-host` in install, where --host is the server)",
+        "имя хоста для мимикрии вместо выбранного из базы хостов (`--mimic-host` в install, где --host это сервер)"
     ),
     OptBrowser => (
         "match a browser's measured packet sizes: chrome | edge | firefox | safari | ios | yandex-desktop | yandex-mobile | 360 | qq",

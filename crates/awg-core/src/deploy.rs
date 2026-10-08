@@ -169,10 +169,10 @@ pub mod remote {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use crate::awg3::Awg3Options;
     use crate::platform::Tool;
     use crate::rng::Rng;
     use crate::ssh::{Session, exec, exec_sudo};
+    use crate::versions::GenOptions;
     use crate::{Error, Result};
 
     // Spelled out rather than glob-imported: the transport functions below share
@@ -400,7 +400,9 @@ pub mod remote {
     pub struct DeployOptions {
         pub network: NetworkSpec,
         pub container: ContainerSpec,
-        pub awg3: Awg3Options,
+        /// What `awg-tool gen` would be asked for: version, profile, client,
+        /// switches. The image follows the version unless one was named.
+        pub params: GenOptions,
         /// Pull the image when the target does not have it. Off by default: the
         /// image is normally built from `containers/awg3` and pulling silently
         /// would be a different binary than the one that was reviewed.
@@ -414,14 +416,14 @@ pub mod remote {
             Self {
                 network: NetworkSpec::default(),
                 container: ContainerSpec::default(),
-                awg3: Awg3Options::default(),
+                params: GenOptions::default(),
                 pull: false,
                 verify_attempts: 20,
             }
         }
     }
 
-    /// Put an AmneziaWG 3.0 server on the target and come back with the client's
+    /// Put an AmneziaWG server of the requested version on the target and come back with the client's
     /// config. See the module note for what does and does not cross the wire.
     pub fn deploy(
         session: &Session,
@@ -493,7 +495,7 @@ pub mod remote {
         };
 
         // --- config ----------------------------------------------------------
-        let tunnel = Tunnel::generate(rng, opts.awg3)?;
+        let tunnel = Tunnel::generate(rng, &opts.params)?;
         let conf_path = opts.container.conf_path();
         let out = r.run_root(&install_server_conf_command(
             &conf_path,
@@ -542,8 +544,8 @@ pub mod remote {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::awg3::Awg3Options;
     use crate::rng::SeededRng;
+    use crate::versions::GenOptions;
 
     fn keys() -> Keys {
         Keys {
@@ -664,7 +666,7 @@ mod tests {
             endpoint_host: "95.85.30.7".into(),
             ..Default::default()
         };
-        let tunnel = Tunnel::generate(&mut SeededRng::new(21), Awg3Options::default()).unwrap();
+        let tunnel = Tunnel::generate(&mut SeededRng::new(21), &GenOptions::default()).unwrap();
         let result = build_result(&net, &tunnel, &keys(), "awg3-server", vec![]).unwrap();
 
         assert!(result.vpn_link.starts_with("vpn://"));

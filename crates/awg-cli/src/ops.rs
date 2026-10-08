@@ -5,14 +5,17 @@
 //! judgement lives in the core so the UI and these commands cannot drift into
 //! disagreeing about what a healthy node looks like.
 
+use awg_core::deploy::config::ContainerSpec;
 use awg_core::deploy::remote as remote_deploy;
 use awg_core::deploy::{prepare, survey};
 use awg_core::docker::{self, Container, Host};
 use awg_core::platform::Tool;
+use awg_core::presets::MTU_31;
 use awg_core::profile;
 use awg_core::rng::SecureRng;
 use awg_core::ssh;
 use awg_core::update;
+use awg_core::versions::AwgVersion;
 
 use crate::i18n::{Key as K, Lang, t};
 use crate::remote;
@@ -436,8 +439,23 @@ pub fn cmd_install(args: &[String], lang: Lang) {
         }
     }
 
+    // ── what to generate ──
+    // The same knobs as `gen`. Here `--host` is the machine to install on, so
+    // a mimicry host has to be asked for by its own name.
+    let mut params = crate::gen_options(args, lang);
+    params.mimic.custom_host = flag(args, "--mimic-host");
+    let mut opts = remote_deploy::DeployOptions {
+        container: ContainerSpec::for_version(params.version),
+        ..Default::default()
+    };
+    if params.version == AwgVersion::V3_1 {
+        // The 3.1 preset's 1280: under trailers a large share of the traffic
+        // goes out at full size, and full size has to cross any path.
+        opts.network.mtu = MTU_31 as u16;
+    }
+    opts.params = params;
+
     // ── the port ──
-    let mut opts = remote_deploy::DeployOptions::default();
     if let Some(p) = flag(args, "--listen-port").and_then(|v| v.parse::<u16>().ok()) {
         opts.network.listen_port = p;
     }
