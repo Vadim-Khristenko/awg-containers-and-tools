@@ -34,7 +34,8 @@ pub enum MimicProfile {
     Quic0Rtt,
     TlsClientHello,
     WireguardNoise,
-    Dtls,
+    Dtls12,
+    Dtls13,
     Http3,
     Sip,
     /// Composite: a TLS ClientHello followed by a QUIC Initial, the way a
@@ -50,12 +51,13 @@ pub enum MimicProfile {
 impl MimicProfile {
     /// The profiles `Random` draws from — the dispatch table of `genI1`, in the
     /// same order, so a seeded run can be compared against the TypeScript.
-    pub const CONCRETE: [MimicProfile; 10] = [
+    pub const CONCRETE: [MimicProfile; 11] = [
         MimicProfile::QuicInitial,
         MimicProfile::Quic0Rtt,
         MimicProfile::TlsClientHello,
         MimicProfile::WireguardNoise,
-        MimicProfile::Dtls,
+        MimicProfile::Dtls12,
+        MimicProfile::Dtls13,
         MimicProfile::Http3,
         MimicProfile::Sip,
         MimicProfile::DnsQuery,
@@ -64,12 +66,13 @@ impl MimicProfile {
     ];
 
     /// Every value, including `Random`.
-    pub const ALL: [MimicProfile; 11] = [
+    pub const ALL: [MimicProfile; 12] = [
         MimicProfile::QuicInitial,
         MimicProfile::Quic0Rtt,
         MimicProfile::TlsClientHello,
         MimicProfile::WireguardNoise,
-        MimicProfile::Dtls,
+        MimicProfile::Dtls12,
+        MimicProfile::Dtls13,
         MimicProfile::Http3,
         MimicProfile::Sip,
         MimicProfile::TlsToQuic,
@@ -85,7 +88,8 @@ impl MimicProfile {
             MimicProfile::Quic0Rtt => "quic0rtt",
             MimicProfile::TlsClientHello => "tls",
             MimicProfile::WireguardNoise => "noise",
-            MimicProfile::Dtls => "dtls",
+            MimicProfile::Dtls12 => "dtls12",
+            MimicProfile::Dtls13 => "dtls13",
             MimicProfile::Http3 => "http3",
             MimicProfile::Sip => "sip",
             MimicProfile::TlsToQuic => "tls-to-quic",
@@ -102,7 +106,8 @@ impl MimicProfile {
             MimicProfile::Quic0Rtt => "QUIC 0-RTT",
             MimicProfile::TlsClientHello => "TLS 1.3",
             MimicProfile::WireguardNoise => "Noise_IK",
-            MimicProfile::Dtls => "DTLS 1.3",
+            MimicProfile::Dtls12 => "DTLS 1.2",
+            MimicProfile::Dtls13 => "DTLS 1.3",
             MimicProfile::Http3 => "HTTP/3",
             MimicProfile::Sip => "SIP",
             MimicProfile::TlsToQuic => "TLS -> QUIC",
@@ -121,7 +126,9 @@ impl MimicProfile {
             "quic0rtt" | "quic-0rtt" => MimicProfile::Quic0Rtt,
             "tls" | "tls-client-hello" => MimicProfile::TlsClientHello,
             "noise" | "wireguard-noise" => MimicProfile::WireguardNoise,
-            "dtls" => MimicProfile::Dtls,
+            // `dtls` is the pre-split id, and it was a 1.2 record all along.
+            "dtls" | "dtls12" | "dtls-1-2" => MimicProfile::Dtls12,
+            "dtls13" | "dtls-1-3" => MimicProfile::Dtls13,
             "http3" => MimicProfile::Http3,
             "sip" => MimicProfile::Sip,
             "tls-to-quic" => MimicProfile::TlsToQuic,
@@ -346,7 +353,8 @@ fn build_one(rng: &mut impl Rng, profile: MimicProfile, opts: &MimicOptions, iv:
         MimicProfile::Quic0Rtt => profiles::quic_0rtt(rng, opts, iv),
         MimicProfile::TlsClientHello => profiles::tls_client_hello(rng, opts, iv),
         MimicProfile::WireguardNoise => profiles::wireguard_noise(rng, opts, iv),
-        MimicProfile::Dtls => profiles::dtls(rng, opts, iv),
+        MimicProfile::Dtls12 => profiles::dtls12(rng, opts, iv),
+        MimicProfile::Dtls13 => profiles::dtls13(rng, opts, iv),
         MimicProfile::Http3 => profiles::http3(rng, opts, iv),
         MimicProfile::Sip => profiles::sip(rng, opts, iv),
         MimicProfile::DnsQuery => profiles::dns_query(rng, opts, iv),

@@ -362,34 +362,85 @@ pub(super) fn tls_client_hello(rng: &mut impl Rng, opts: &MimicOptions, iv: u32)
     c
 }
 
-pub(super) fn dtls(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
+/// DTLS record header: type, version, epoch, sequence number, length.
+const DTLS_RECORD_HEADER: u32 = 1 + 2 + 2 + 6 + 2;
+/// DTLS handshake header: type, length, message sequence, fragment offset,
+/// fragment length. Both versions frame the first flight the same way.
+const DTLS_HANDSHAKE_HEADER: u32 = 1 + 3 + 2 + 3 + 3;
+
+/// The ClientHello tail a DTLS 1.3 client sends after its random, RFC 9147
+/// §5.3: empty session id, empty cookie (a 1.3-only client sends zero
+/// length), the three DTLS-OK TLS 1.3 suites, null compression, and one
+/// supported_versions extension announcing 0xfefc. The version fields on the
+/// wire stay 0xfefd; that is what the RFC asks for.
+const DTLS13_TAIL: &[u8] = &[
+    0x00, 0x00, // session id, cookie: both empty
+    0x00, 0x06, 0x13, 0x01, 0x13, 0x02, 0x13, 0x03, // suites
+    0x01, 0x00, // compression: null
+    0x00, 0x07, // extensions length
+    0x00, 0x2b, 0x00, 0x03, 0x02, 0xfe, 0xfc, // supported_versions: DTLS 1.3
+];
+
+/// A DTLS 1.2 ClientHello: client version 0xfefd (ones' complement, so DTLS
+/// counts down where TLS counts up) and the 32-byte random. RFC 6347 §4.1,
+/// handshake §4.2.2.
+pub(super) fn dtls12(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
+    let mut body = Buf::new();
+    body.lit(&[0xfe, 0xfd]).random(rng, 32);
+    dtls_flight(rng, opts, iv, body.0)
+}
+
+/// A DTLS 1.3 ClientHello: legacy_version, random, and the §5.3 tail.
+pub(super) fn dtls13(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
+    let mut body = Buf::new();
+    body.lit(&[0xfe, 0xfd]).random(rng, 32).lit(DTLS13_TAIL);
+    dtls_flight(rng, opts, iv, body.0)
+}
+
+/// One unfragmented DTLS first flight around a ClientHello body.
+///
+/// A ClientHello opens the first flight, before any cipher change, so its epoch
+/// is 0 and nothing else is possible: a random epoch is a giveaway, not
+/// variety. Message sequence 0, fragment offset 0, fragment length equal to the
+/// whole body, and a record length that describes what it precedes, tags
+/// included.
+fn dtls_flight(rng: &mut impl Rng, opts: &MimicOptions, iv: u32, body: Vec<u8>) -> Chain {
     let host = opts.host(rng, super::hosts::DTLS);
-    let frag_len = rng.range(100, 300);
     let sni_rc = (host.len() as u32 + rng.range(2, 8)).min(60);
-    let epoch = rng.range(0, 255);
+    let tag_bytes = if opts.tag_rc { sni_rc } else { 0 } + tag_overhead(opts);
+
+    let fixed = DTLS_RECORD_HEADER + DTLS_HANDSHAKE_HEADER + body.len() as u32;
+    let padding = if opts.tag_r {
+        calc_padding(
+            rng,
+            fixed,
+            tag_bytes,
+            opts.fp_range(BfpSlot::Dtls),
+            iv,
+            opts.mtu,
+        )
+    } else {
+        0
+    };
+    let body_len = body.len() as u32 + tag_bytes + padding;
+    let record_len = DTLS_HANDSHAKE_HEADER + body_len;
 
     let mut b = Buf::new();
     b.lit(&[0x16]) // handshake
-        .lit(&[0xfe, 0xfd]) // DTLS 1.2
-        .be(epoch, 2)
-        .random(rng, 6) // sequence number
-        .be(frag_len, 2)
+        // legacy_record_version is {254,253} in both versions: RFC 6347 §4.1,
+        // RFC 9147 §4.
+        .lit(&[0xfe, 0xfd])
+        .lit(&[0x00, 0x00]) // epoch 0
+        // A 48-bit sequence number. Real stacks start at zero and count up.
+        .be(0, 4)
+        .be(rng.range(0, 4), 2)
+        .be(record_len, 2)
         .lit(&[0x01]) // ClientHello
-        .random(rng, 6) // length + message sequence
-        .lit(&[0xfe, 0xfd, 0x00, 0x00])
-        .random(rng, 4)
-        .random(rng, 32);
-
-    let header_b = b.len();
-    let extra_b = if opts.tag_rc { sni_rc } else { 0 } + tag_overhead(opts);
-    let pad = calc_padding(
-        rng,
-        header_b,
-        extra_b,
-        opts.fp_range(BfpSlot::Dtls),
-        iv,
-        opts.mtu,
-    );
+        .be(body_len, 3)
+        .lit(&[0x00, 0x00]) // first message of the flight
+        .lit(&[0x00, 0x00, 0x00]) // fragment offset
+        .be(body_len, 3) // unfragmented
+        .lit(&body);
 
     let mut c = Chain::new();
     c.push(b.into_tag())
@@ -397,7 +448,7 @@ pub(super) fn dtls(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
         .push_if(opts.tag_c, Tag::Counter)
         .push_if(opts.tag_t, Tag::Timestamp);
     if opts.tag_r {
-        c.push_padding(pad, PadKind::Bytes);
+        c.push_padding(padding, PadKind::Bytes);
     }
     c
 }
@@ -746,6 +797,50 @@ mod tests {
                 assert!(pkt.len() as u32 <= opts.mtu);
             }
         }
+    }
+
+    #[test]
+    fn dtls_first_flights_are_epoch_zero_and_their_lengths_are_true() {
+        type Build = fn(&mut SeededRng, &MimicOptions, u32) -> Chain;
+        let builders: [(&str, Build); 2] = [("1.2", dtls12), ("1.3", dtls13)];
+        for (name, build) in builders {
+            for opts in [
+                all_tags(),
+                MimicOptions::default(),
+                MimicOptions {
+                    tag_r: false,
+                    ..all_tags()
+                },
+            ] {
+                for seed in 0..150u64 {
+                    let mut rng = SeededRng::new(seed);
+                    let pkt = build(&mut rng, &opts, 2).materialize(&mut rng, 5, 6);
+                    assert_eq!(&pkt[..3], &[0x16, 0xfe, 0xfd], "{name}");
+                    assert_eq!(&pkt[3..5], &[0, 0], "{name}: epoch must be 0");
+                    let record = usize::from(u16::from_be_bytes([pkt[11], pkt[12]]));
+                    assert_eq!(record, pkt.len() - 13, "{name} seed {seed}: record length");
+                    assert_eq!(pkt[13], 0x01, "ClientHello");
+                    let len24 = |i: usize| {
+                        (usize::from(pkt[i]) << 16)
+                            | (usize::from(pkt[i + 1]) << 8)
+                            | usize::from(pkt[i + 2])
+                    };
+                    let body = len24(14);
+                    assert_eq!(body, record - 12, "{name}: handshake length");
+                    assert_eq!(&pkt[17..22], &[0, 0, 0, 0, 0], "{name}: seq 0, offset 0");
+                    assert_eq!(len24(22), body, "{name}: unfragmented");
+                    assert_eq!(&pkt[25..27], &[0xfe, 0xfd], "{name}: client version");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_dtls13_tail_declares_the_extensions_it_carries() {
+        // session id, cookie, suites, compression, then extensions.
+        let at = 2 + 8 + 2;
+        let declared = usize::from(u16::from_be_bytes([DTLS13_TAIL[at], DTLS13_TAIL[at + 1]]));
+        assert_eq!(declared, DTLS13_TAIL.len() - at - 2);
     }
 
     #[test]
