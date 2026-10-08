@@ -453,33 +453,99 @@ fn dtls_flight(rng: &mut impl Rng, opts: &MimicOptions, iv: u32, body: Vec<u8>) 
     c
 }
 
+/// A SIP REGISTER request, per RFC 3261 §7.1.
+///
+/// The request line used to be `REGISTER sip:<host> ` and four random bytes
+/// where SIP wants the protocol version, which any parser rejects on the first
+/// line. A REGISTER also carries mandatory headers: Via with a branch starting
+/// with the magic cookie `z9hG4bK`, From and To with the address of record,
+/// Call-ID, CSeq naming the method, Max-Forwards and Content-Length.
+///
+/// The padding goes in the body with Content-Length declaring it, which is how
+/// SIP carries arbitrary bytes, so the padded message stays a valid one rather
+/// than a valid one with rubbish stuck to the end.
+///
+/// With [`MimicOptions::compact`] the same request comes in RFC 3261's compact
+/// form (§7.3.3): one-letter Via, From, To, Call-ID and Content-Length, no
+/// Contact or User-Agent, at about two thirds of the bytes. Phones use it for
+/// exactly this, to keep a request inside one datagram; here it keeps five of
+/// them inside the kernel module's netlink budget.
 pub(super) fn sip(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
     let host = opts.host(rng, super::hosts::SIP);
+    let user = format!("user{}", rng.range(1000, 9999));
 
-    let mut b = Buf::new();
-    b.lit(b"REGISTER sip:")
-        .lit(host.as_bytes())
-        .lit(b" ")
-        .random(rng, 4);
-
-    let header_b = b.len();
-    // Where the branch parameter, Call-ID and the rest of the header block would
-    // be — letters, because that is what a DPI box reading SIP expects to find.
     let rc_val = (host.len() as u32 + rng.range(8, 24) * iv).min(150);
-    let r_len = (rng.range(5, 30) * iv).min(120).min(
-        opts.mtu
-            .saturating_sub(header_b + rc_val + tag_overhead(opts)),
+    let tag_bytes = if opts.tag_rc { rc_val } else { 0 } + tag_overhead(opts);
+
+    let headers: Vec<String> = if opts.compact {
+        vec![
+            format!("REGISTER sip:{host} SIP/2.0"),
+            format!(
+                "v: SIP/2.0/UDP {host}:5060;branch=z9hG4bK{};rport",
+                hex_token(rng, 5)
+            ),
+            "Max-Forwards: 70".into(),
+            format!("f: <sip:{user}@{host}>;tag={}", hex_token(rng, 4)),
+            format!("t: <sip:{user}@{host}>"),
+            format!("i: {}@{host}", hex_token(rng, 8)),
+            format!("CSeq: {} REGISTER", rng.range(1, 9999)),
+        ]
+    } else {
+        vec![
+            format!("REGISTER sip:{host} SIP/2.0"),
+            format!(
+                "Via: SIP/2.0/UDP {host}:5060;branch=z9hG4bK{};rport",
+                hex_token(rng, 7)
+            ),
+            "Max-Forwards: 70".into(),
+            format!("From: <sip:{user}@{host}>;tag={}", hex_token(rng, 5)),
+            format!("To: <sip:{user}@{host}>"),
+            format!("Call-ID: {}@{host}", hex_token(rng, 10)),
+            format!("CSeq: {} REGISTER", rng.range(1, 9999)),
+            format!("Contact: <sip:{user}@{host}:5060>;expires=3600"),
+            format!(
+                "User-Agent: {}",
+                if opts.mimic_all {
+                    "Linphone/5.2.5"
+                } else {
+                    "PJSUA v2.13"
+                }
+            ),
+        ]
+    };
+
+    let prefix = headers.join("\r\n") + "\r\n";
+    // Room for the Content-Length line and the blank line that ends the
+    // headers comes off before deciding how much body fits.
+    let room = opts.mtu.saturating_sub(
+        prefix.len() as u32 + tag_bytes + "Content-Length: 9999\r\n\r\n".len() as u32,
     );
+    let padding = if opts.tag_r {
+        (rng.range(5, 30) * iv).min(120).min(room)
+    } else {
+        0
+    };
+    // Content-Length counts the body: the padding plus what the tags emit.
+    let length_header = if opts.compact { "l" } else { "Content-Length" };
+    let message = format!("{prefix}{length_header}: {}\r\n\r\n", padding + tag_bytes);
 
     let mut c = Chain::new();
-    c.push(b.into_tag())
+    c.push(Tag::Bytes(message.into_bytes()))
         .push_if(opts.tag_rc, Tag::RandomLetters(rc_val))
         .push_if(opts.tag_c, Tag::Counter)
         .push_if(opts.tag_t, Tag::Timestamp);
     if opts.tag_r {
-        c.push_padding(r_len, PadKind::Bytes);
+        c.push_padding(padding, PadKind::Bytes);
     }
     c
+}
+
+/// `rh(n)` as text: n random bytes in lowercase hex, for branch, tag and
+/// Call-ID values.
+fn hex_token(rng: &mut impl Rng, bytes: usize) -> String {
+    let mut raw = vec![0u8; bytes];
+    rng.fill(&mut raw);
+    raw.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub(super) fn dns_query(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
@@ -841,6 +907,73 @@ mod tests {
         let at = 2 + 8 + 2;
         let declared = usize::from(u16::from_be_bytes([DTLS13_TAIL[at], DTLS13_TAIL[at + 1]]));
         assert_eq!(declared, DTLS13_TAIL.len() - at - 2);
+    }
+
+    /// The text of a SIP chain's `<b>` and the body bytes its tags put after it.
+    fn sip_parts(c: &Chain) -> (String, u32) {
+        let Tag::Bytes(head) = &c.tags()[0] else {
+            panic!("SIP starts with its text")
+        };
+        let body = c.tags()[1..].iter().map(Tag::wire_len).sum();
+        (String::from_utf8(head.clone()).unwrap(), body)
+    }
+
+    fn sip_opts(compact: bool) -> MimicOptions {
+        MimicOptions {
+            custom_host: Some("sip.example.org".into()),
+            compact,
+            ..all_tags()
+        }
+    }
+
+    #[test]
+    fn a_register_carries_what_rfc_3261_requires() {
+        for (compact, via, from, to, call_id, len) in [
+            (false, "Via", "From", "To", "Call-ID", "Content-Length"),
+            (true, "v", "f", "t", "i", "l"),
+        ] {
+            for seed in 0..60u64 {
+                let mut rng = SeededRng::new(seed);
+                let (text, body) = sip_parts(&sip(&mut rng, &sip_opts(compact), 2));
+                let lines: Vec<&str> = text.split("\r\n").collect();
+                assert_eq!(lines[0], "REGISTER sip:sip.example.org SIP/2.0");
+                let has = |prefix: &str| lines.iter().any(|l| l.starts_with(prefix));
+                assert!(has(&format!(
+                    "{via}: SIP/2.0/UDP sip.example.org:5060;branch=z9hG4bK"
+                )));
+                assert!(has("Max-Forwards: 70"));
+                assert!(has(&format!("{from}: <sip:user")));
+                assert!(has(&format!("{to}: <sip:user")));
+                assert!(has(&format!("{call_id}: ")));
+                assert!(
+                    lines
+                        .iter()
+                        .any(|l| l.starts_with("CSeq: ") && l.ends_with(" REGISTER"))
+                );
+                assert!(text.ends_with("\r\n\r\n"));
+                let declared: u32 = lines
+                    .iter()
+                    .find_map(|l| l.strip_prefix(&format!("{len}: ")))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert_eq!(declared, body, "compact={compact} seed {seed}: body length");
+            }
+        }
+    }
+
+    #[test]
+    fn the_compact_register_is_about_two_thirds_of_the_full_one() {
+        for seed in 0..40u64 {
+            let full = sip_parts(&sip(&mut SeededRng::new(seed), &sip_opts(false), 2)).0;
+            let short = sip_parts(&sip(&mut SeededRng::new(seed), &sip_opts(true), 2)).0;
+            assert!(
+                short.len() * 10 < full.len() * 8,
+                "{} vs {}",
+                short.len(),
+                full.len()
+            );
+        }
     }
 
     #[test]

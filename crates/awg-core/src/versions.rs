@@ -1150,10 +1150,19 @@ pub fn generate(rng: &mut impl Rng, opts: &GenOptions) -> Result<VersionedParams
             router_mode: opts.router_mode,
             ..opts.mimic.clone()
         };
-        let chains = mimic::generate_chains(rng, opts.profile, opts.intensity, &mimic);
         // Kept inside the kernel module's netlink budget whichever engines were
         // named: the same block goes on the server, and a Linux server running
-        // awg-quick on the module is the common case elsewhere.
+        // awg-quick on the module is the common case elsewhere. First the
+        // profile's full form, then its compact one, then entropy in the
+        // trailing slots.
+        let mut chains = mimic::generate_chains(rng, opts.profile, opts.intensity, &mimic);
+        if chain_budget::chain_bytes(&chains) > KMOD_CHAIN_BUDGET {
+            let compact = MimicOptions {
+                compact: true,
+                ..mimic.clone()
+            };
+            chains = mimic::generate_chains(rng, opts.profile, opts.intensity, &compact);
+        }
         Some(chain_budget::fit(
             chains,
             |slot| mimic::entropy_chain(rng, opts.intensity, &mimic, slot),
@@ -2562,6 +2571,55 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The ASCII inside a chain's leading `<b 0x…>`.
+    fn sip_text(chain: &str) -> String {
+        match Chain::parse(chain).unwrap().tags().first() {
+            Some(mimic::Tag::Bytes(b)) => String::from_utf8_lossy(b).into_owned(),
+            _ => String::new(),
+        }
+    }
+
+    #[test]
+    fn five_sip_registers_go_compact_rather_than_lose_their_slots() {
+        let p = generate(
+            &mut SeededRng::new(3),
+            &GenOptions {
+                version: AwgVersion::V2_0,
+                profile: MimicProfile::Sip,
+                client: client("awg-kmod").unwrap(),
+                mimic: MimicOptions {
+                    mimic_all: true,
+                    custom_host: Some("sip.mtt.ru".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for chain in p.chains.as_ref().unwrap() {
+            let text = sip_text(chain);
+            assert!(
+                text.starts_with("REGISTER sip:sip.mtt.ru SIP/2.0\r\n"),
+                "{text}"
+            );
+            assert!(text.contains("\r\nv: SIP/2.0/UDP "), "{text}");
+        }
+
+        // One REGISTER fits as it is and keeps its full form.
+        let one = generate(
+            &mut SeededRng::new(3),
+            &GenOptions {
+                version: AwgVersion::V2_0,
+                profile: MimicProfile::Sip,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let i1 = sip_text(&one.chains.as_ref().unwrap()[0]);
+        assert!(i1.contains("\r\nVia: SIP/2.0/UDP "), "{i1}");
+        assert!(i1.contains("\r\nContent-Length: "), "{i1}");
     }
 
     #[test]

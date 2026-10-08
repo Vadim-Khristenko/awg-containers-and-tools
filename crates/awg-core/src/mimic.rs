@@ -296,6 +296,10 @@ pub struct MimicOptions {
     /// Failed-attempt counter. Past three, everything is generated one notch
     /// stronger — the previous set was evidently recognised.
     pub iter_count: u32,
+    /// Ask profiles for their shorter form, when they have one. Set by the
+    /// generator, not by the user: it is what a chain set that would not fit
+    /// the kernel module's netlink budget is rebuilt with.
+    pub compact: bool,
 }
 
 impl Default for MimicOptions {
@@ -312,6 +316,7 @@ impl Default for MimicOptions {
             browser: None,
             router_mode: false,
             iter_count: 0,
+            compact: false,
         }
     }
 }
