@@ -13,6 +13,7 @@ mod theme;
 mod tui;
 
 use awg_core::awg3::Intensity;
+use awg_core::engines::Engine;
 use awg_core::mimic::{BrowserProfile, MimicOptions, MimicProfile};
 use awg_core::rng::SecureRng;
 use awg_core::versions::{self, AwgVersion, GenOptions, Level};
@@ -162,6 +163,7 @@ fn usage(lang: Lang) {
     println!("  --version 3.1        {}", t(lang, K::OptVersion));
     println!("  --profile quic       {}", t(lang, K::OptProfile));
     println!("  --client amneziavpn  {}", t(lang, K::OptClient));
+    println!("  --server-engine go   {}", t(lang, K::OptServerEngine));
     println!("  --uapi               {}", t(lang, K::OptUapi));
     println!("  --json               {}", t(lang, K::OptJson));
     println!("  --out client.conf    {}", t(lang, K::OptOut));
@@ -233,6 +235,17 @@ fn cmd_gen(args: &[String], lang: Lang) {
         },
     };
 
+    let server_engine = match flag_value(args, "--server-engine") {
+        None => Engine::Go,
+        Some(raw) => match Engine::parse(&raw) {
+            Some(e) => e,
+            None => {
+                let valid: Vec<&str> = Engine::ALL.iter().map(|e| e.id()).collect();
+                bail(lang, K::ErrUnknownEngine, &raw, &valid);
+            }
+        },
+    };
+
     let browser = match flag_value(args, "--browser") {
         None => None,
         Some(raw) => match BrowserProfile::parse(&raw) {
@@ -280,6 +293,7 @@ fn cmd_gen(args: &[String], lang: Lang) {
         profile,
         intensity,
         client,
+        server_engine,
         router_mode,
         extreme,
         junk_level,
@@ -293,8 +307,8 @@ fn cmd_gen(args: &[String], lang: Lang) {
             mtu,
             mimic_all: has_flag(args, "--mimic-all"),
             custom_host: flag_value(args, "--host"),
-            // <c> stays opt-in: several amneziawg-go builds answer ErrorCode
-            // 1000 and refuse the whole config.
+            // Kept so old scripts still parse; generate() decides <c> from the
+            // engines on both ends.
             tag_c: has_flag(args, "--tag-c"),
             browser,
             router_mode,
@@ -358,7 +372,7 @@ fn cmd_gen(args: &[String], lang: Lang) {
     }
 
     // Warnings go to stderr so `awg-tool gen > client.conf` stays a valid file.
-    let warnings: Vec<_> = versions::validate_for_client(&params, client)
+    let warnings: Vec<_> = versions::validate_for(&params, client, server_engine)
         .into_iter()
         .filter(|v| v.level == Level::Warn)
         .collect();
@@ -377,15 +391,20 @@ fn cmd_clients(lang: Lang) {
     println!("{}:", t(lang, K::CmdClients));
     for c in &versions::CLIENTS {
         println!("  {:<20} {} ({})", c.id, c.name, c.platforms.join(", "));
+        let tags: Vec<&str> = c
+            .tags(versions::AwgVersion::V3_0)
+            .iter()
+            .map(|k| k.as_str())
+            .collect();
         println!(
-            "      maxH={} maxJc={} maxS4={} <c>={} <rc>={} <rd>={}",
+            "      engine={} maxH={} maxJc={} maxS4={} I1-I5={}",
+            c.engine.id(),
             c.max_h_value,
             c.max_jc,
             c.max_s4,
-            c.supports_tag_c,
-            c.supports_tag_rc,
-            c.supports_tag_rd
+            c.supports_i1_i5
         );
+        println!("      tags (2.0+): {}", tags.join(" "));
         for issue in c.known_issues {
             println!("      ! {issue}");
         }

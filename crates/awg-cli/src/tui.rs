@@ -639,14 +639,24 @@ fn draw_generate(f: &mut ratatui::Frame, app: &App, area: Rect) {
             Span::styled(c.max_s4.to_string(), theme::base()),
         ]),
         Line::from(vec![
+            Span::styled("engine ", theme::dim()),
+            Span::styled(c.engine.label(), theme::base()),
+        ]),
+        Line::from(vec![
             Span::styled("tags   ", theme::dim()),
             Span::styled(
-                format!(
-                    "<c>{} <rc>{} <rd>{}",
-                    yes_no(c.supports_tag_c),
-                    yes_no(c.supports_tag_rc),
-                    yes_no(c.supports_tag_rd)
-                ),
+                {
+                    let tags: Vec<&str> = c
+                        .tags(app.opts.version)
+                        .iter()
+                        .map(|k| k.as_str())
+                        .collect();
+                    if tags.is_empty() {
+                        "none".to_string()
+                    } else {
+                        tags.join(" ")
+                    }
+                },
                 theme::base(),
             ),
         ]),
@@ -721,10 +731,6 @@ fn draw_generate(f: &mut ratatui::Frame, app: &App, area: Rect) {
             right[1],
         );
     }
-}
-
-fn yes_no(v: bool) -> &'static str {
-    if v { "✓" } else { "✕" }
 }
 
 fn draw_prose(

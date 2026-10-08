@@ -138,8 +138,12 @@ strings! {
         "строить по профилю все пять пакетов, а не только I1"
     ),
     OptTagC => (
-        "enable the <c> tag (off by default: ErrorCode 1000 on several builds)",
-        "включить тег <c> (по умолчанию выключен: на ряде сборок ErrorCode 1000)"
+        "accepted for old scripts; <c> is now used wherever both engines parse it",
+        "оставлен для старых скриптов: <c> теперь ставится везде, где его парсят оба движка"
+    ),
+    OptServerEngine => (
+        "what parses I1-I5 on the server: go (default, these images) | kmod | awg-quick | kmod-bsd | unverified",
+        "что разбирает I1-I5 на сервере: go (по умолчанию, эти образы) | kmod | awg-quick | kmod-bsd | unverified"
     ),
     OptJunk => (
         "junk packets before the handshake, 0..32 (default 5)",
@@ -162,6 +166,7 @@ strings! {
     ErrUnknownVersion => ("unsupported protocol version", "неподдерживаемая версия протокола"),
     ErrUnknownProfile => ("unknown mimicry profile", "неизвестный профиль мимикрии"),
     ErrUnknownClient => ("unknown client", "неизвестный клиент"),
+    ErrUnknownEngine => ("unknown engine", "неизвестный движок"),
     ErrUnknownBrowser => ("unknown browser profile", "неизвестный профиль браузера"),
     ErrBadMtu => ("MTU out of range", "MTU вне допустимого диапазона"),
     // ── talking to a server ─────────────────────────────────────────────

@@ -7,6 +7,7 @@
 
 pub mod awg3;
 pub mod deploy;
+pub mod engines;
 pub mod mimic;
 pub mod platform;
 pub mod profile;

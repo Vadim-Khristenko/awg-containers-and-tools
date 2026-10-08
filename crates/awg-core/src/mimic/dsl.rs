@@ -72,6 +72,16 @@ pub enum TagKind {
 }
 
 impl TagKind {
+    /// Every kind, in declaration order.
+    pub const ALL: [TagKind; 6] = [
+        TagKind::Bytes,
+        TagKind::Random,
+        TagKind::RandomLetters,
+        TagKind::RandomDigits,
+        TagKind::Counter,
+        TagKind::Timestamp,
+    ];
+
     /// The tag as it is spelled in a chain, for messages.
     pub fn as_str(&self) -> &'static str {
         match self {

@@ -28,7 +28,8 @@ use crate::awg3::{
 use crate::deploy::config::{
     BaseObfuscation, MAX_S4, MESSAGE_COOKIE_SIZE, MESSAGE_INITIATION_SIZE, MESSAGE_RESPONSE_SIZE,
 };
-use crate::mimic::{self, Chain, MimicOptions, MimicProfile, Tag, TagKind};
+use crate::engines::{self, Engine};
+use crate::mimic::{self, Chain, MimicOptions, MimicProfile, TagKind};
 use crate::render::{awg3_conf_lines, awg3_uapi_lines};
 use crate::rng::Rng;
 use crate::{Error, Result};
@@ -243,171 +244,238 @@ impl std::fmt::Display for AwgVersion {
 
 /// What one concrete AmneziaWG implementation will actually accept.
 ///
-/// Ported verbatim from `clients.ts`, whose source data is upstream
-/// amneziawg-android / -windows / -go, AmneziaVPN desktop and mobile, community
-/// firmware packages and user reports.
+/// Ported from Architect `generator/clients.ts`. The chain vocabulary is not a
+/// column here: it comes off [`Engine`], so two clients on one engine cannot
+/// disagree about what that engine parses. That disagreement is what this
+/// replaced: Android, iOS and Amnezia VPN claimed `<c>` while Windows denied
+/// it, and all four ship the same `amneziawg-go/v3 v3.0.1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientCapability {
     pub id: &'static str,
     pub name: &'static str,
     pub platforms: &'static [&'static str],
-    /// Largest H the client's parser survives — `UINT32_MAX` for most,
-    /// `INT32_MAX` for the Windows client.
+    /// What reads the junk-packet chain underneath this client.
+    pub engine: Engine,
+    /// Largest H the client's own validator accepts. The protocol and both
+    /// engines take the full `u32`; panels and editors sometimes do not.
     pub max_h_value: u32,
     pub supports_s3_s4: bool,
-    pub supports_tag_c: bool,
-    pub supports_tag_rc: bool,
-    pub supports_tag_rd: bool,
+    /// False for a client that drops I1-I5 rather than sending them.
     pub supports_i1_i5: bool,
     pub max_jc: u32,
     pub max_s4: u32,
     pub known_issues: &'static [&'static str],
 }
 
+impl ClientCapability {
+    /// The chain tags this client's engine parses for `version`.
+    pub fn tags(&self, version: AwgVersion) -> Vec<TagKind> {
+        if !self.supports_i1_i5 {
+            return Vec::new();
+        }
+        self.engine.tags(version)
+    }
+
+    pub fn supports_tag(&self, version: AwgVersion, kind: TagKind) -> bool {
+        self.tags(version).contains(&kind)
+    }
+}
+
 const UINT32_MAX: u32 = 4_294_967_295;
-/// The Windows client parses H into a signed 32-bit integer — issue #85.
+/// What amneziawg-windows accepted before v2.0.2, and what wg-easy's validator
+/// still accepts (`H_MAX = 2 ** 31 - 1`).
 const INT32_MAX: u32 = 2_147_483_647;
 
-pub const CLIENTS: [ClientCapability; 10] = [
+/// The fields most entries share; each entry overrides what differs.
+const fn on(
+    id: &'static str,
+    name: &'static str,
+    platforms: &'static [&'static str],
+    engine: Engine,
+    known_issues: &'static [&'static str],
+) -> ClientCapability {
     ClientCapability {
-        id: "amneziawg-android",
-        name: "AmneziaWG Android",
-        platforms: &["Android 5+"],
+        id,
+        name,
+        platforms,
+        engine,
         max_h_value: UINT32_MAX,
         supports_s3_s4: true,
-        supports_tag_c: true,
-        supports_tag_rc: true,
-        supports_tag_rd: true,
         supports_i1_i5: true,
         max_jc: 10,
         max_s4: 32,
-        known_issues: &[],
-    },
+        known_issues,
+    }
+}
+
+const GO_NO_TAG_C: &str = "The tunnel is amneziawg-go, which has no <c>: its vocabulary is <b>, \
+     <t>, <r>, <rc>, <rd>, <d>, <ds>, <dz>. The packet counter exists only in the Linux kernel \
+     module.";
+const ENGINE_UNVERIFIED: &str = "The engine that reads I1-I5 here could not be established from \
+     source, so only the tags both known engines understand are used; <c> is withheld.";
+
+/*
+ * Which engine each client ships, per Architect (every go.mod read 6 aug 2026):
+ *
+ *   amneziawg-android   tunnel/tools/libwg-go/go.mod      amneziawg-go/v3 v3.0.1
+ *   amneziawg-apple     Sources/WireGuardKitGo/go.mod     amneziawg-go/v3 v3.0.1
+ *   amneziawg-windows   go.mod                            amneziawg-go/v3 v3.0.1
+ *   amnezia-client      recipes/awg-go/conanfile.py       version = "3.0.1"
+ *   amneziawg-openwrt   kmod-amneziawg/Makefile           the kernel module
+ */
+pub const CLIENTS: [ClientCapability; 14] = [
+    on(
+        "amneziawg-android",
+        "AmneziaWG Android",
+        &["Android 5+"],
+        Engine::Go,
+        &[GO_NO_TAG_C],
+    ),
+    on(
+        "amneziawg-ios",
+        "AmneziaWG iOS",
+        &["iOS 15+"],
+        Engine::Go,
+        &[GO_NO_TAG_C],
+    ),
     ClientCapability {
-        id: "amneziawg-ios",
-        name: "AmneziaWG iOS",
-        platforms: &["iOS 15+"],
-        max_h_value: UINT32_MAX,
-        supports_s3_s4: true,
-        supports_tag_c: true,
-        supports_tag_rc: true,
-        supports_tag_rd: true,
-        supports_i1_i5: true,
-        max_jc: 10,
-        max_s4: 32,
-        known_issues: &[],
-    },
-    ClientCapability {
-        id: "amneziawg-windows",
-        name: "AmneziaWG Windows",
-        platforms: &["Windows 10+"],
         max_h_value: INT32_MAX,
-        supports_s3_s4: true,
-        supports_tag_c: false,
-        supports_tag_rc: false,
-        supports_tag_rd: false,
-        supports_i1_i5: true,
-        max_jc: 10,
-        max_s4: 32,
-        known_issues: &["H-value cap at INT32_MAX (issue #85)"],
+        ..on(
+            "amneziawg-windows",
+            "AmneziaWG Windows",
+            &["Windows 10+"],
+            Engine::Go,
+            &["H-value cap at INT32_MAX (issue #85)", GO_NO_TAG_C],
+        )
     },
+    on(
+        "amneziavpn",
+        "Amnezia VPN",
+        &["Android", "iOS", "Windows", "macOS", "Linux"],
+        Engine::Go,
+        &[GO_NO_TAG_C],
+    ),
+    // `libam-go.so` comes from a vendored fork whose `device/obf.go` is the
+    // upstream blob, so the vocabulary is go's.
+    on(
+        "wg-tunnel",
+        "WG Tunnel",
+        &["Android"],
+        Engine::Go,
+        &[
+            "Large S3/S4 may drain battery or behave inconsistently; keep S4 modest.",
+            GO_NO_TAG_C,
+        ],
+    ),
     ClientCapability {
-        id: "amneziavpn",
-        name: "Amnezia VPN",
-        platforms: &["Android", "iOS", "Windows", "macOS", "Linux"],
-        max_h_value: UINT32_MAX,
-        supports_s3_s4: true,
-        supports_tag_c: true,
-        supports_tag_rc: true,
-        supports_tag_rd: true,
-        supports_i1_i5: true,
-        max_jc: 10,
-        max_s4: 32,
-        known_issues: &[],
+        supports_i1_i5: false,
+        ..on(
+            "wiresock",
+            "WireSock",
+            &["Windows"],
+            Engine::WireSock,
+            &[
+                "Does not send I1-I5 at all and drops the fields without a word, so the \
+               mimicry is simply not on the wire. Configs for it carry no I1-I5.",
+            ],
+        )
     },
+    // `adapter/outbound/wireguard.go` builds on `metacubex/amneziawg-go`.
+    on(
+        "mihomo",
+        "mihomo / Clash.Meta",
+        &["Windows", "macOS", "Linux", "Android"],
+        Engine::Go,
+        &[
+            "Reaches AWG 3.0 only with `version: 3` in the outbound options; below \
+             that it runs the older implementation, without header protection.",
+            GO_NO_TAG_C,
+        ],
+    ),
+    // `Instance.xml` bounds Jc to 1..128 and Jmin/Jmax from 1.
     ClientCapability {
-        id: "wg-tunnel",
-        name: "WG Tunnel",
-        platforms: &["Android"],
-        max_h_value: UINT32_MAX,
-        supports_s3_s4: true,
-        supports_tag_c: false,
-        supports_tag_rc: false,
-        supports_tag_rd: false,
-        supports_i1_i5: true,
-        max_jc: 10,
-        max_s4: 32,
-        known_issues: &["Large S3/S4 may drain battery or behave inconsistently; keep S4 modest."],
-    },
-    ClientCapability {
-        id: "wiresock",
-        name: "WireSock",
-        platforms: &["Windows"],
-        max_h_value: UINT32_MAX,
-        supports_s3_s4: true,
-        supports_tag_c: false,
-        supports_tag_rc: false,
-        supports_tag_rd: false,
-        supports_i1_i5: true,
-        max_jc: 10,
-        max_s4: 32,
-        known_issues: &[],
-    },
-    ClientCapability {
-        id: "keenetic-native",
-        name: "Keenetic (native)",
-        platforms: &["Keenetic OS 4.x"],
-        max_h_value: UINT32_MAX,
-        supports_s3_s4: true,
-        supports_tag_c: true,
-        supports_tag_rc: true,
-        supports_tag_rd: true,
-        supports_i1_i5: true,
         max_jc: 128,
-        max_s4: 32,
-        known_issues: &["I1 sensitivity: prefer simple <r 64> or DNS mimicry profiles."],
+        ..on(
+            "opnsense",
+            "OPNsense (os-amneziawg)",
+            &["OPNsense 25.x+"],
+            Engine::KmodBsd,
+            &[
+                "The plugin bounds Jc to 1-128 and starts Jmin and Jmax at 1 rather than 0.",
+                ENGINE_UNVERIFIED,
+            ],
+        )
     },
     ClientCapability {
-        id: "awg-go-legacy",
-        name: "amneziawg-go (legacy)",
-        platforms: &["Linux", "macOS"],
-        max_h_value: UINT32_MAX,
-        supports_s3_s4: true,
-        supports_tag_c: false,
-        supports_tag_rc: false,
-        supports_tag_rd: false,
-        supports_i1_i5: true,
         max_jc: 128,
-        max_s4: 32,
-        known_issues: &["Tag <c> is not implemented — ErrorCode 1000."],
+        ..on(
+            "keenetic-native",
+            "Keenetic (native)",
+            &["Keenetic OS 4.x"],
+            Engine::Unverified,
+            &[
+                "I1 sensitivity: prefer simple <r 64> or DNS mimicry profiles.",
+                ENGINE_UNVERIFIED,
+            ],
+        )
+    },
+    // wg-easy `src/server/utils/types.ts`: H_MIN = 5, H_MAX = 2 ** 31 - 1,
+    // JcSchema 1..128. Architect issue #18.
+    ClientCapability {
+        max_h_value: INT32_MAX,
+        max_jc: 128,
+        ..on(
+            "wg-easy",
+            "wg-easy",
+            &["Docker", "Linux"],
+            Engine::AwgQuick,
+            &[
+                "The panel refuses H1-H4 above 2147483647 and will not save the interface; \
+               ranges are laid out under that cap.",
+            ],
+        )
     },
     ClientCapability {
-        id: "openwrt",
-        name: "OpenWRT",
-        platforms: &["OpenWrt"],
-        max_h_value: UINT32_MAX,
-        supports_s3_s4: true,
-        supports_tag_c: true,
-        supports_tag_rc: true,
-        supports_tag_rd: true,
-        supports_i1_i5: true,
         max_jc: 128,
-        max_s4: 32,
-        known_issues: &[],
+        ..on(
+            "awg-go-legacy",
+            "amneziawg-go (legacy)",
+            &["Linux", "macOS"],
+            Engine::Go,
+            &[GO_NO_TAG_C],
+        )
     },
     ClientCapability {
-        id: "asus-merlin",
-        name: "ASUS Merlin",
-        platforms: &["Asuswrt-Merlin"],
-        max_h_value: UINT32_MAX,
-        supports_s3_s4: true,
-        supports_tag_c: true,
-        supports_tag_rc: true,
-        supports_tag_rd: true,
-        supports_i1_i5: true,
         max_jc: 128,
-        max_s4: 32,
-        known_issues: &[],
+        ..on(
+            "awg-kmod",
+            "amneziawg-linux-kernel-module",
+            &["Linux"],
+            Engine::Kmod,
+            &["The only engine with <c>, and the only one without <d>, <ds> and <dz>."],
+        )
+    },
+    ClientCapability {
+        max_jc: 128,
+        ..on(
+            "openwrt",
+            "OpenWRT",
+            &["OpenWrt"],
+            Engine::Kmod,
+            &["OpenWrt packages build the kernel module, so <c> works here."],
+        )
+    },
+    // Merlin carries no AmneziaWG itself; Entware or a third-party package
+    // brings it, and which one decides the tag set.
+    ClientCapability {
+        max_jc: 128,
+        ..on(
+            "asus-merlin",
+            "ASUS Merlin",
+            &["Asuswrt-Merlin"],
+            Engine::Unverified,
+            &[ENGINE_UNVERIFIED],
+        )
     },
 ];
 
@@ -719,6 +787,10 @@ pub struct GenOptions {
     pub profile: MimicProfile,
     pub intensity: Intensity,
     pub client: &'static ClientCapability,
+    /// What parses the chains on the server end. From 2.0 the server's device
+    /// reads I1-I5 too, so a tag it lacks is refused there. amneziawg-go by
+    /// default, because that is what the images here run.
+    pub server_engine: Engine,
     pub mimic: MimicOptions,
     /// 3.0 only; ignored by every other version.
     pub header_protection: bool,
@@ -749,6 +821,7 @@ impl Default for GenOptions {
             profile: MimicProfile::QuicInitial,
             intensity: Intensity::Medium,
             client: default_client(),
+            server_engine: Engine::Go,
             mimic: MimicOptions::default(),
             header_protection: true,
             content_padding: true,
@@ -1008,22 +1081,21 @@ pub fn generate(rng: &mut impl Rng, opts: &GenOptions) -> Result<VersionedParams
     });
 
     let chains = if opts.version.supports_cps() && client.supports_i1_i5 {
-        // A tag the daemon or the client does not implement is not a smaller
-        // packet, it is a config that is refused outright — so they are filtered
-        // before generation, not validated after it. The version comes first:
-        // the client matrix records what an implementation added on top of its
-        // generation, never a tag its generation does not have.
-        let vocab = opts.version.chain_tags();
+        // A tag either end does not implement is not a smaller packet, it is a
+        // config that is refused outright, so they are filtered before
+        // generation, not validated after it. Both engines are asked for this
+        // generation: the vocabulary was replaced between 1.5 and 2.0.
+        let vocab = engines::shared_tags(opts.version, client.engine, opts.server_engine);
         let has = |k: TagKind| vocab.contains(&k);
         let mimic = MimicOptions {
-            // Not `opts.mimic.tag_c`: `<c>` is 1.5's only counter and is a parse
-            // error from 2.0 on, so it is the generation that decides, not a
-            // preference. The opt-in flag only ever meant "I am on 1.5".
-            tag_c: has(TagKind::Counter) && client.supports_tag_c,
+            // `<c>` is used wherever both ends parse it: 1.5 on go, or the
+            // kernel module on both ends. The opt-in flag never covered a tag
+            // whose absence is a parse error.
+            tag_c: has(TagKind::Counter),
             tag_t: opts.mimic.tag_t && has(TagKind::Timestamp),
             tag_r: opts.mimic.tag_r && has(TagKind::Random),
-            tag_rc: opts.mimic.tag_rc && has(TagKind::RandomLetters) && client.supports_tag_rc,
-            tag_rd: opts.mimic.tag_rd && has(TagKind::RandomDigits) && client.supports_tag_rd,
+            tag_rc: opts.mimic.tag_rc && has(TagKind::RandomLetters),
+            tag_rd: opts.mimic.tag_rd && has(TagKind::RandomDigits),
             router_mode: opts.router_mode,
             ..opts.mimic.clone()
         };
@@ -1066,7 +1138,7 @@ pub fn generate(rng: &mut impl Rng, opts: &GenOptions) -> Result<VersionedParams
     };
 
     // Safety net: never hand out a config our own validator would refuse.
-    let fatal: Vec<String> = validate_for_client(&params, client)
+    let fatal: Vec<String> = validate_for(&params, client, opts.server_engine)
         .into_iter()
         .filter(|v| v.level == Level::Error)
         .map(|v| format!("{}: {}", v.field, v.message))
@@ -1087,7 +1159,19 @@ pub fn generate(rng: &mut impl Rng, opts: &GenOptions) -> Result<VersionedParams
 ///
 /// Errors are configs that will be refused or that will fail silently; warnings
 /// are configs that work and give something away.
+///
+/// The server end is taken to be amneziawg-go, which is what the images here
+/// run; [`validate_for`] names it explicitly.
 pub fn validate_for_client(params: &VersionedParams, client: &ClientCapability) -> Vec<Violation> {
+    validate_for(params, client, Engine::Go)
+}
+
+/// [`validate_for_client`] with the server's engine named.
+pub fn validate_for(
+    params: &VersionedParams,
+    client: &ClientCapability,
+    server_engine: Engine,
+) -> Vec<Violation> {
     let mut out = Vec::new();
     let v = params.version;
 
@@ -1268,19 +1352,23 @@ pub fn validate_for_client(params: &VersionedParams, client: &ClientCapability) 
                     }
                 };
 
-                let vocab = v.chain_tags();
+                // Anything some parser of this generation knows; a tag outside
+                // that is wrong on every end, and saying so names the version.
+                let known: Vec<TagKind> = TagKind::ALL
+                    .into_iter()
+                    .filter(|k| Engine::ALL.iter().any(|e| e.has_tag(v, *k)))
+                    .collect();
+                let client_tags = client.tags(v);
+                let server_tags = server_engine.tags(v);
                 let mut seen: Vec<TagKind> = Vec::new();
                 for tag in chain.tags() {
                     let kind = tag.kind();
-                    // The daemon's own vocabulary is checked before the client's:
-                    // a tag this generation never had is wrong on every client,
-                    // and saying so names the thing that has to change.
-                    if !vocab.contains(&kind) {
+                    if !known.contains(&kind) {
                         complain(
                             &mut out,
                             "version.tag_vocabulary",
                             format!(
-                                "{field} uses {}, which the AWG {v} parser has no builder for — \
+                                "{field} uses {}, which no AWG {v} parser has a builder for: \
                                  the daemon answers `invalid tag`, not a shorter packet",
                                 kind.as_str()
                             ),
@@ -1300,21 +1388,26 @@ pub fn validate_for_client(params: &VersionedParams, client: &ClientCapability) 
                     }
                     seen.push(kind);
 
-                    let (supported, name, code) = match tag {
-                        Tag::Counter => (client.supports_tag_c, "<c>", "client.tag_c"),
-                        Tag::RandomLetters(_) => {
-                            (client.supports_tag_rc, "<rc N>", "client.tag_rc")
-                        }
-                        Tag::RandomDigits(_) => (client.supports_tag_rd, "<rd N>", "client.tag_rd"),
-                        _ => continue,
-                    };
-                    if !supported {
+                    if !client_tags.contains(&kind) {
                         complain(
                             &mut out,
-                            code,
+                            "client.tag_unsupported",
                             format!(
-                                "{field} uses {name}, which {} does not implement",
-                                client.name
+                                "{field} uses {}, which {} on {} does not parse",
+                                kind.as_str(),
+                                client.name,
+                                client.engine.label()
+                            ),
+                        );
+                    } else if !v.cps_is_client_only() && !server_tags.contains(&kind) {
+                        complain(
+                            &mut out,
+                            "server.tag_unsupported",
+                            format!(
+                                "{field} uses {}, which the server's {} does not parse; from \
+                                 2.0 the server reads I1-I5 too",
+                                kind.as_str(),
+                                server_engine.label()
                             ),
                         );
                     }
@@ -1639,75 +1732,151 @@ mod tests {
         }
     }
 
+    /// Every tag in every generated chain, by kind.
+    fn emitted(p: &VersionedParams) -> Vec<TagKind> {
+        p.chains
+            .iter()
+            .flatten()
+            .flat_map(|raw| {
+                Chain::parse(raw)
+                    .unwrap()
+                    .tags()
+                    .iter()
+                    .map(|t| t.kind())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     #[test]
-    fn tags_a_client_cannot_parse_are_never_generated_for_it() {
-        // Windows, WireSock, WG Tunnel and legacy amneziawg-go implement none of
-        // <c>, <rc> and <rd>; a chain using one is refused outright, not degraded.
-        for id in [
-            "amneziawg-windows",
-            "wiresock",
-            "wg-tunnel",
-            "awg-go-legacy",
-        ] {
-            let c = client(id).unwrap();
-            for seed in 0..40u64 {
-                let p = generate(
-                    &mut SeededRng::new(seed),
-                    &GenOptions {
-                        version: AwgVersion::V2_0,
-                        client: c,
-                        mimic: MimicOptions {
-                            tag_c: true,
+    fn tags_either_end_cannot_parse_are_never_generated() {
+        // A chain one end does not parse is refused outright, not degraded, so
+        // every client is generated for and nothing outside what both its own
+        // engine and the go server take may come out.
+        for v in [AwgVersion::V1_5, AwgVersion::V2_0, AwgVersion::V3_1] {
+            for c in CLIENTS.iter() {
+                let allowed = engines::shared_tags(v, c.engine, Engine::Go);
+                for seed in 0..20u64 {
+                    let p = generate(
+                        &mut SeededRng::new(seed),
+                        &GenOptions {
+                            version: v,
+                            client: c,
+                            mimic: MimicOptions {
+                                mimic_all: true,
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
-                        ..Default::default()
-                    },
-                )
-                .unwrap();
-                let joined = p.chains.as_ref().unwrap().join("");
-                assert!(!joined.contains("<c>"), "{id} got <c>");
-                assert!(!joined.contains("<rc "), "{id} got <rc>");
-                assert!(!joined.contains("<rd "), "{id} got <rd>");
-                assert!(
-                    validate_for_client(&p, c)
-                        .iter()
-                        .all(|v| v.level != Level::Error)
-                );
+                    )
+                    .unwrap();
+                    for k in emitted(&p) {
+                        assert!(allowed.contains(&k), "{} on {v} got {}", c.id, k.as_str());
+                    }
+                    assert!(
+                        validate_for_client(&p, c)
+                            .iter()
+                            .all(|x| x.level != Level::Error)
+                    );
+                }
             }
         }
     }
 
     #[test]
-    fn an_unsupported_tag_smuggled_into_a_chain_is_reported_by_field() {
-        // Generated for Windows, so the chains start clean and the only tags it
-        // cannot parse are the ones planted here.
-        let win = client("amneziawg-windows").unwrap();
-        let mut p = generate(
-            &mut SeededRng::new(9),
+    fn a_client_that_drops_i1_i5_gets_none() {
+        let ws = client("wiresock").unwrap();
+        let p = generate(
+            &mut SeededRng::new(1),
             &GenOptions {
-                version: AwgVersion::V2_0,
-                client: win,
+                version: AwgVersion::V3_0,
+                client: ws,
                 ..Default::default()
             },
         )
         .unwrap();
+        assert!(p.chains.is_none(), "WireSock was handed chains it drops");
         assert!(
-            validate_for_client(&p, win)
+            validate_for_client(&p, ws)
                 .iter()
-                .all(|v| v.level != Level::Error)
+                .all(|x| x.code != "version.cps_missing")
         );
+    }
 
-        // `<c>` is left out: on 2.0 that is the daemon's problem before it is
-        // Windows' — see tags_outside_the_version_vocabulary_are_reported.
-        p.chains.as_mut().unwrap()[2] = "<b 0xdead><rc 12><rd 4>".into();
-        let found = validate_for_client(&p, win);
-        for code in ["client.tag_rc", "client.tag_rd"] {
-            let hits: Vec<_> = found.iter().filter(|v| v.code == code).collect();
-            assert_eq!(hits.len(), 1, "{code} in {found:?}");
-            assert_eq!(hits[0].field, "I3", "the offending chain must be named");
-            assert_eq!(hits[0].level, Level::Error);
-            assert!(hits[0].message.contains("AmneziaWG Windows"));
+    #[test]
+    fn the_kernel_module_on_both_ends_gets_its_counter() {
+        let kmod = client("awg-kmod").unwrap();
+        let mut with_counter = 0;
+        for seed in 0..40u64 {
+            let p = generate(
+                &mut SeededRng::new(seed),
+                &GenOptions {
+                    version: AwgVersion::V3_0,
+                    client: kmod,
+                    server_engine: Engine::Kmod,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            if emitted(&p).contains(&TagKind::Counter) {
+                with_counter += 1;
+            }
+            assert!(
+                validate_for(&p, kmod, Engine::Kmod)
+                    .iter()
+                    .all(|x| x.level != Level::Error)
+            );
         }
+        assert!(with_counter > 0, "kmod to kmod never used <c>");
+    }
+
+    #[test]
+    fn an_unsupported_tag_smuggled_into_a_chain_is_reported_by_field() {
+        let android = client("amneziawg-android").unwrap();
+        let mut p = make(AwgVersion::V3_0, 9);
+        p.chains.as_mut().unwrap()[2] = "<b 0xdead><c><rc 12>".into();
+
+        // go on the client: `<c>` is the client's problem, named with its engine.
+        let found = validate_for_client(&p, android);
+        let hits: Vec<_> = found
+            .iter()
+            .filter(|x| x.code == "client.tag_unsupported")
+            .collect();
+        assert_eq!(hits.len(), 1, "{found:?}");
+        assert_eq!(hits[0].field, "I3", "the offending chain must be named");
+        assert_eq!(hits[0].level, Level::Error);
+        assert!(hits[0].message.contains("AmneziaWG Android"));
+        assert!(hits[0].message.contains("amneziawg-go"));
+
+        // The kernel module parses it, the go server does not.
+        let kmod = client("awg-kmod").unwrap();
+        let found = validate_for_client(&p, kmod);
+        assert!(found.iter().all(|x| x.code != "client.tag_unsupported"));
+        let hit = found
+            .iter()
+            .find(|x| x.code == "server.tag_unsupported")
+            .unwrap_or_else(|| panic!("go server accepted <c>: {found:?}"));
+        assert_eq!(hit.field, "I3");
+
+        // Both ends on the module: nothing to say.
+        assert!(
+            validate_for(&p, kmod, Engine::Kmod)
+                .iter()
+                .all(|x| !x.code.ends_with("tag_unsupported"))
+        );
+    }
+
+    #[test]
+    fn on_1_5_only_the_client_parses_the_chain() {
+        // The 1.5 server never reads I1-I5, so a server engine without `<c>`
+        // does not make a client chain with `<c>` wrong.
+        let mut p = make(AwgVersion::V1_5, 2);
+        p.chains.as_mut().unwrap()[0] = "<b 0x01><c>".into();
+        assert!(
+            validate_for(&p, default_client(), Engine::WireSock)
+                .iter()
+                .all(|x| x.code != "server.tag_unsupported")
+        );
     }
 
     #[test]
@@ -1728,7 +1897,7 @@ mod tests {
                                 client: c,
                                 mimic: MimicOptions {
                                     mimic_all: true,
-                                    // Ask for everything; the version gate is
+                                    // Ask for everything; the engines are
                                     // what has to say no.
                                     tag_c: true,
                                     ..Default::default()
@@ -1737,7 +1906,7 @@ mod tests {
                             },
                         )
                         .unwrap();
-                        for (i, raw) in p.chains.as_ref().unwrap().iter().enumerate() {
+                        for (i, raw) in p.chains.iter().flatten().enumerate() {
                             let chain = Chain::parse(raw).unwrap();
                             for tag in chain.tags() {
                                 assert!(
@@ -1768,7 +1937,7 @@ mod tests {
         assert!(!v15.contains(&TagKind::RandomLetters), "1.5 has no <rc>");
         assert!(!v15.contains(&TagKind::RandomDigits), "1.5 has no <rd>");
 
-        // device/obf.go: b, t, r, rc, rd, d, ds, dz — note the absence of c.
+        // device/obf.go: b, t, r, rc, rd, d, ds, dz. Note the absence of c.
         for v in [AwgVersion::V2_0, AwgVersion::V3_0] {
             let tags = v.chain_tags();
             assert!(!tags.contains(&TagKind::Counter), "{v} has no <c>");
@@ -1791,14 +1960,15 @@ mod tests {
                 },
             )
             .unwrap();
-            if p.chains.as_ref().unwrap().join("").contains("<c>") {
+            if emitted(&p).contains(&TagKind::Counter) {
                 with_counter += 1;
             }
         }
         assert!(with_counter > 0, "1.5 never emitted <c>");
 
-        // ...but not for the clients that never implemented it.
-        for id in ["amneziawg-windows", "wiresock", "awg-go-legacy"] {
+        // ...but not where the engine is unread: claiming the counter there
+        // would be claiming a parser on no evidence.
+        for id in ["keenetic-native", "asus-merlin", "opnsense", "wiresock"] {
             let c = client(id).unwrap();
             for seed in 0..25u64 {
                 let p = generate(
@@ -1810,19 +1980,31 @@ mod tests {
                     },
                 )
                 .unwrap();
-                assert!(
-                    !p.chains.as_ref().unwrap().join("").contains("<c>"),
-                    "{id} got <c>"
-                );
+                assert!(!emitted(&p).contains(&TagKind::Counter), "{id} got <c>");
             }
         }
     }
 
     #[test]
     fn tags_outside_the_version_vocabulary_are_reported() {
+        // No parser of 1.5 has <rc> or <rd>, whatever the engine.
+        for (planted, spelled) in [("<b 0x01><rc 12>", "<rc N>"), ("<b 0x01><rd 4>", "<rd N>")] {
+            let mut p = make(AwgVersion::V1_5, 3);
+            p.chains.as_mut().unwrap()[0] = planted.into();
+            let found = validate_for_client(&p, client("awg-kmod").unwrap());
+            let hit = found
+                .iter()
+                .find(|x| x.code == "version.tag_vocabulary")
+                .unwrap_or_else(|| panic!("AWG 1.5 accepted {planted}: {found:?}"));
+            assert_eq!(hit.field, "I1");
+            assert_eq!(hit.level, Level::Error);
+            assert!(hit.message.contains(spelled), "{}", hit.message);
+        }
+    }
+
+    #[test]
+    fn tags_the_client_engine_lacks_are_reported() {
         for (v, planted, spelled) in [
-            (AwgVersion::V1_5, "<b 0x01><rc 12>", "<rc N>"),
-            (AwgVersion::V1_5, "<b 0x01><rd 4>", "<rd N>"),
             (AwgVersion::V2_0, "<b 0x01><c>", "<c>"),
             (AwgVersion::V3_0, "<b 0x01><c>", "<c>"),
         ] {
@@ -1831,7 +2013,7 @@ mod tests {
             let found = validate_for_client(&p, default_client());
             let hit = found
                 .iter()
-                .find(|x| x.code == "version.tag_vocabulary")
+                .find(|x| x.code == "client.tag_unsupported")
                 .unwrap_or_else(|| panic!("AWG {v} accepted {planted}: {found:?}"));
             assert_eq!(hit.field, "I1");
             assert_eq!(hit.level, Level::Error);
@@ -2170,7 +2352,7 @@ mod tests {
 
     #[test]
     fn the_client_matrix_matches_the_upstream_table() {
-        assert_eq!(CLIENTS.len(), 10);
+        assert_eq!(CLIENTS.len(), 14);
         let mut ids = BTreeSet::new();
         for c in &CLIENTS {
             assert!(ids.insert(c.id), "duplicate client id {}", c.id);
@@ -2179,8 +2361,35 @@ mod tests {
             assert!(c.max_h_value == UINT32_MAX || c.max_h_value == INT32_MAX);
         }
         assert_eq!(client("amneziawg-windows").unwrap().max_h_value, INT32_MAX);
-        assert!(!client("awg-go-legacy").unwrap().supports_tag_c);
+        assert_eq!(client("wg-easy").unwrap().max_h_value, INT32_MAX);
         assert_eq!(client("keenetic-native").unwrap().max_jc, 128);
+        assert!(!client("wiresock").unwrap().supports_i1_i5);
+
+        // The engine decides the tags, so every app on amneziawg-go agrees.
+        for id in [
+            "amneziawg-android",
+            "amneziawg-ios",
+            "amneziawg-windows",
+            "amneziavpn",
+            "wg-tunnel",
+            "mihomo",
+            "awg-go-legacy",
+        ] {
+            let c = client(id).unwrap();
+            assert_eq!(c.engine, Engine::Go, "{id}");
+            assert!(!c.supports_tag(AwgVersion::V3_0, TagKind::Counter), "{id}");
+            assert!(
+                c.supports_tag(AwgVersion::V3_0, TagKind::RandomLetters),
+                "{id}"
+            );
+        }
+        for id in ["awg-kmod", "openwrt"] {
+            assert!(
+                client(id)
+                    .unwrap()
+                    .supports_tag(AwgVersion::V3_0, TagKind::Counter)
+            );
+        }
         assert_eq!(default_client().id, DEFAULT_CLIENT_ID);
         assert!(client("does-not-exist").is_none());
     }
