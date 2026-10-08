@@ -15,7 +15,9 @@
 use std::io::{Stdout, stdout};
 
 use awg_core::awg3::Intensity;
-use awg_core::mimic::MimicProfile;
+use awg_core::engines::Engine;
+use awg_core::mimic::hostdb::Region;
+use awg_core::mimic::{BrowserProfile, MimicProfile};
 use awg_core::rng::SecureRng;
 use awg_core::versions::{
     self, AwgVersion, ClientCapability, GenOptions, Level, VersionedParams, Violation,
@@ -30,7 +32,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::i18n::{Key as K, Lang, t};
 use crate::theme;
@@ -62,30 +64,69 @@ impl Screen {
     }
 }
 
-/// One editable option on the generate screen.
+/// One editable option on the generate screen. Every knob the generator has,
+/// so nothing is reachable from the flags alone.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Field {
     Version,
     Profile,
     Client,
+    Release,
+    ServerEngine,
+    Region,
+    Whitelisted,
+    Browser,
     Intensity,
     Junk,
+    Mtu,
+    Attempt,
+    MimicAll,
+    HeaderProtection,
+    ContentPadding,
+    RandomTimings,
+    RandomTrailers,
+    DisableCookies,
+    NarrowH,
+    SameS,
+    DisableH,
+    TagT,
+    TagR,
+    TagRc,
+    TagRd,
     Router,
     Extreme,
-    NarrowH,
     Format,
 }
 
 impl Field {
-    const ALL: [Field; 9] = [
+    const ALL: [Field; 28] = [
         Field::Version,
         Field::Profile,
         Field::Client,
+        Field::Release,
+        Field::ServerEngine,
+        Field::Region,
+        Field::Whitelisted,
+        Field::Browser,
         Field::Intensity,
         Field::Junk,
+        Field::Mtu,
+        Field::Attempt,
+        Field::MimicAll,
+        Field::HeaderProtection,
+        Field::ContentPadding,
+        Field::RandomTimings,
+        Field::RandomTrailers,
+        Field::DisableCookies,
+        Field::NarrowH,
+        Field::SameS,
+        Field::DisableH,
+        Field::TagT,
+        Field::TagR,
+        Field::TagRc,
+        Field::TagRd,
         Field::Router,
         Field::Extreme,
-        Field::NarrowH,
         Field::Format,
     ];
 
@@ -94,11 +135,30 @@ impl Field {
             Field::Version => t(lang, K::LblVersion),
             Field::Profile => t(lang, K::LblProfile),
             Field::Client => t(lang, K::LblClient),
+            Field::Release => t(lang, K::LblRelease),
+            Field::ServerEngine => t(lang, K::LblServerEngine),
+            Field::Region => t(lang, K::LblRegion),
+            Field::Whitelisted => t(lang, K::LblWhitelisted),
+            Field::Browser => t(lang, K::LblBrowser),
             Field::Intensity => t(lang, K::LblIntensity),
             Field::Junk => t(lang, K::LblJunk),
+            Field::Mtu => "MTU",
+            Field::Attempt => t(lang, K::LblAttempt),
+            Field::MimicAll => t(lang, K::LblMimicAll),
+            Field::HeaderProtection => "HeaderProtection",
+            Field::ContentPadding => "ContentPadding",
+            Field::RandomTimings => t(lang, K::LblRandomTimings),
+            Field::RandomTrailers => "RandomTrailers",
+            Field::DisableCookies => "DisableCookies",
+            Field::NarrowH => t(lang, K::LblNarrowH),
+            Field::SameS => t(lang, K::LblSameS),
+            Field::DisableH => t(lang, K::LblDisableH),
+            Field::TagT => "<t>",
+            Field::TagR => "<r>",
+            Field::TagRc => "<rc>",
+            Field::TagRd => "<rd>",
             Field::Router => t(lang, K::LblRouter),
             Field::Extreme => t(lang, K::LblExtreme),
-            Field::NarrowH => t(lang, K::LblNarrowH),
             Field::Format => t(lang, K::LblFormat),
         }
     }
@@ -114,6 +174,8 @@ pub struct App {
     field_idx: usize,
     opts: GenOptions,
     client_idx: usize,
+    /// 0 is the current build; n is the nth older release of that client.
+    release_idx: usize,
     params: Option<VersionedParams>,
     violations: Vec<Violation>,
     show_uapi: bool,
@@ -146,6 +208,7 @@ impl App {
             field_idx: 0,
             opts,
             client_idx,
+            release_idx: 0,
             params: None,
             violations: Vec::new(),
             show_uapi: false,
@@ -224,12 +287,11 @@ impl App {
     }
 
     fn regenerate(&mut self) {
-        self.opts.client = versions::CLIENTS
-            .get(self.client_idx)
-            .unwrap_or_else(|| versions::default_client());
+        self.opts.client = self.client();
         match versions::generate(&mut SecureRng, &self.opts) {
             Ok(p) => {
-                self.violations = versions::validate_for_client(&p, self.opts.client);
+                self.violations =
+                    versions::validate_for(&p, self.opts.client, self.opts.server_engine);
                 self.params = Some(p);
                 let errs = self
                     .violations
@@ -259,38 +321,64 @@ impl App {
     /// same code serves both arrows.
     fn adjust(&mut self, delta: i32) {
         let field = Field::ALL[self.field_idx];
+        let o = &mut self.opts;
         match field {
             Field::Version => {
-                self.opts.version = cycle(&AwgVersion::ALL, self.opts.version, delta);
+                o.version = cycle(&AwgVersion::ALL, o.version, delta);
+                // Picking a version is picking a feature set, as in Architect:
+                // the switches move to where that version recommends.
+                o.apply_preset();
+                o.narrow_h = o.version == AwgVersion::V3_1;
             }
-            Field::Profile => {
-                self.opts.profile = cycle(&MimicProfile::ALL, self.opts.profile, delta);
-            }
+            Field::Profile => o.profile = cycle(&MimicProfile::ALL, o.profile, delta),
             Field::Client => {
                 self.client_idx = wrap(self.client_idx, versions::CLIENTS.len(), delta);
+                self.release_idx = 0;
+            }
+            Field::Release => {
+                let n = versions::releases_of(self.client_base().id).count() + 1;
+                self.release_idx = wrap(self.release_idx, n, delta);
+            }
+            Field::ServerEngine => o.server_engine = cycle(&Engine::ALL, o.server_engine, delta),
+            Field::Region => o.mimic.region = cycle_opt(&Region::ALL, o.mimic.region, delta),
+            Field::Whitelisted => {
+                o.mimic.whitelisted_in = cycle_opt(&Region::ALL, o.mimic.whitelisted_in, delta)
+            }
+            Field::Browser => {
+                o.mimic.browser = cycle_opt(&BrowserProfile::ALL, o.mimic.browser, delta)
             }
             Field::Intensity => {
                 const I: [Intensity; 3] = [Intensity::Low, Intensity::Medium, Intensity::High];
-                self.opts.intensity = cycle(&I, self.opts.intensity, delta);
+                o.intensity = cycle(&I, o.intensity, delta);
             }
-            Field::Junk => {
-                let lo = 0i32;
-                let hi = 32i32;
-                let v = (self.opts.junk_level as i32 + delta).clamp(lo, hi);
-                self.opts.junk_level = v as u8;
+            Field::Junk => o.junk_level = (o.junk_level as i32 + delta).clamp(0, 32) as u8,
+            Field::Mtu => {
+                const MTUS: [u32; 7] = [1280, 1320, 1380, 1400, 1420, 1460, 1500];
+                o.mimic.mtu = cycle(&MTUS, o.mimic.mtu, delta);
             }
+            Field::Attempt => {
+                o.mimic.iter_count = (o.mimic.iter_count as i32 + delta).clamp(0, 10) as u32
+            }
+            Field::MimicAll => o.mimic.mimic_all = !o.mimic.mimic_all,
+            Field::HeaderProtection => o.header_protection = !o.header_protection,
+            Field::ContentPadding => o.content_padding = !o.content_padding,
+            Field::RandomTimings => o.random_timings = !o.random_timings,
+            Field::RandomTrailers => o.random_trailers = !o.random_trailers,
+            Field::DisableCookies => o.disable_cookies = !o.disable_cookies,
+            Field::NarrowH => o.narrow_h = !o.narrow_h,
+            Field::SameS => o.same_s = !o.same_s,
+            Field::DisableH => o.disable_h = !o.disable_h,
+            Field::TagT => o.mimic.tag_t = !o.mimic.tag_t,
+            Field::TagR => o.mimic.tag_r = !o.mimic.tag_r,
+            Field::TagRc => o.mimic.tag_rc = !o.mimic.tag_rc,
+            Field::TagRd => o.mimic.tag_rd = !o.mimic.tag_rd,
             Field::Router => {
-                self.opts.router_mode = !self.opts.router_mode;
-                self.opts.mimic.router_mode = self.opts.router_mode;
+                o.router_mode = !o.router_mode;
+                o.mimic.router_mode = o.router_mode;
             }
-            Field::Extreme => {
-                self.opts.extreme = !self.opts.extreme;
-            }
-            Field::NarrowH => {
-                self.opts.narrow_h = !self.opts.narrow_h;
-            }
+            Field::Extreme => o.extreme = !o.extreme,
             // Format changes how the same parameters are printed, so it must
-            // not draw new ones — regenerating here would look like the output
+            // not draw new ones: regenerating here would look like the output
             // format altered the config.
             Field::Format => {
                 self.show_uapi = !self.show_uapi;
@@ -381,27 +469,81 @@ impl App {
     }
 
     fn field_value(&self, f: Field) -> String {
+        let o = &self.opts;
+        let any = || t(self.lang, K::ValAny).to_string();
+        let off = || on_off(self.lang, false);
+        let current = || t(self.lang, K::ValCurrent).to_string();
         match f {
-            Field::Version => self.opts.version.as_str().to_string(),
-            Field::Profile => self.opts.profile.label().to_string(),
-            Field::Client => self.client().name.to_string(),
-            Field::Intensity => match self.opts.intensity {
+            Field::Version => o.version.as_str().to_string(),
+            Field::Profile => o.profile.label().to_string(),
+            Field::Client => self.client_base().name.to_string(),
+            Field::Release => match self.release_idx {
+                0 => current(),
+                i => versions::releases_of(self.client_base().id)
+                    .nth(i - 1)
+                    .map_or_else(current, |r| r.label.to_string()),
+            },
+            Field::ServerEngine => o.server_engine.id().to_string(),
+            Field::Region => o.mimic.region.map_or_else(any, |r| r.id().to_string()),
+            Field::Whitelisted => o
+                .mimic
+                .whitelisted_in
+                .map_or_else(off, |r| r.id().to_string()),
+            Field::Browser => o.mimic.browser.map_or_else(off, |b| b.id().to_string()),
+            Field::Intensity => match o.intensity {
                 Intensity::Low => t(self.lang, K::ValLow).into(),
                 Intensity::Medium => t(self.lang, K::ValMedium).into(),
                 Intensity::High => t(self.lang, K::ValHigh).into(),
             },
-            Field::Junk => self.opts.junk_level.to_string(),
-            Field::Router => on_off(self.lang, self.opts.router_mode),
-            Field::Extreme => on_off(self.lang, self.opts.extreme),
-            Field::NarrowH => on_off(self.lang, self.opts.narrow_h),
+            Field::Junk => o.junk_level.to_string(),
+            Field::Mtu => o.mimic.mtu.to_string(),
+            Field::Attempt => o.mimic.iter_count.to_string(),
+            Field::MimicAll => on_off(self.lang, o.mimic.mimic_all),
+            Field::HeaderProtection => on_off(self.lang, o.header_protection),
+            Field::ContentPadding => on_off(self.lang, o.content_padding),
+            Field::RandomTimings => on_off(self.lang, o.random_timings),
+            Field::RandomTrailers => on_off(self.lang, o.random_trailers),
+            Field::DisableCookies => on_off(self.lang, o.disable_cookies),
+            Field::NarrowH => on_off(self.lang, o.narrow_h),
+            Field::SameS => on_off(self.lang, o.same_s),
+            Field::DisableH => on_off(self.lang, o.disable_h),
+            Field::TagT => on_off(self.lang, o.mimic.tag_t),
+            Field::TagR => on_off(self.lang, o.mimic.tag_r),
+            Field::TagRc => on_off(self.lang, o.mimic.tag_rc),
+            Field::TagRd => on_off(self.lang, o.mimic.tag_rd),
+            Field::Router => on_off(self.lang, o.router_mode),
+            Field::Extreme => on_off(self.lang, o.extreme),
             Field::Format => if self.show_uapi { "UAPI" } else { ".conf" }.to_string(),
         }
     }
 
-    fn client(&self) -> &'static ClientCapability {
+    /// The client as listed, before any older release is applied.
+    fn client_base(&self) -> &'static ClientCapability {
         versions::CLIENTS
             .get(self.client_idx)
             .unwrap_or_else(|| versions::default_client())
+    }
+
+    /// The client with the chosen release applied: what generation targets.
+    fn client(&self) -> &'static ClientCapability {
+        let base = self.client_base();
+        match self.release_idx {
+            0 => base,
+            i => versions::releases_of(base.id)
+                .nth(i - 1)
+                .map_or(base, |r| &r.caps),
+        }
+    }
+}
+
+/// Step through `None` (shown as off or any) and every value.
+fn cycle_opt<T: PartialEq + Copy>(all: &[T], current: Option<T>, delta: i32) -> Option<T> {
+    let i = current
+        .and_then(|c| all.iter().position(|v| *v == c))
+        .map_or(0, |i| i + 1);
+    match wrap(i, all.len() + 1, delta) {
+        0 => None,
+        n => Some(all[n - 1]),
     }
 }
 
@@ -587,7 +729,7 @@ fn config_lines(raw: &[String]) -> Vec<Line<'static>> {
 fn draw_generate(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(38), Constraint::Min(24)])
+        .constraints([Constraint::Length(42), Constraint::Min(24)])
         .split(area);
 
     let rows = Layout::default()
@@ -606,7 +748,7 @@ fn draw_generate(f: &mut ratatui::Frame, app: &App, area: Rect) {
             ListItem::new(Line::from(vec![
                 Span::styled(if on { "▸ " } else { "  " }, theme::warn()),
                 Span::styled(
-                    format!("{label:<14}"),
+                    format!("{label:<17}"),
                     if on { theme::base() } else { theme::dim() },
                 ),
                 Span::styled(
@@ -620,9 +762,13 @@ fn draw_generate(f: &mut ratatui::Frame, app: &App, area: Rect) {
             ]))
         })
         .collect();
-    f.render_widget(
+    // Twenty-eight knobs do not fit every terminal; the list follows the
+    // cursor instead of letting the selection fall off the bottom.
+    let mut state = ListState::default().with_selected(Some(app.field_idx));
+    f.render_stateful_widget(
         List::new(opts).block(panel(t(app.lang, K::PanelOptions), true)),
         rows[0],
+        &mut state,
     );
 
     // ── what this client will and will not take ──
@@ -997,6 +1143,86 @@ mod tests {
 
     fn app() -> App {
         App::new(Lang::En)
+    }
+
+    fn select(a: &mut App, f: Field) {
+        a.field_idx = Field::ALL.iter().position(|x| *x == f).unwrap();
+    }
+
+    #[test]
+    fn every_knob_turns_both_ways_and_leaves_a_valid_config() {
+        let mut a = app();
+        for (i, _) in Field::ALL.iter().enumerate() {
+            a.field_idx = i;
+            for delta in [1, 1, -1, -1, -1] {
+                a.adjust(delta);
+                if let Some(p) = &a.params {
+                    assert!(
+                        a.violations.iter().all(|v| v.level != Level::Error),
+                        "field {i}: {:?}",
+                        a.violations
+                    );
+                    assert_eq!(p.version, a.opts.version);
+                }
+            }
+            assert!(!a.field_value(Field::ALL[i]).is_empty());
+        }
+    }
+
+    #[test]
+    fn the_last_knob_is_on_screen_in_an_ordinary_terminal() {
+        use ratatui::backend::TestBackend;
+        let mut a = app();
+        a.push(Screen::Generate);
+        a.regenerate();
+        a.field_idx = Field::ALL.len() - 1;
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| draw(f, &a)).unwrap();
+        let screen: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            screen.contains("format"),
+            "the selected last field scrolled into view"
+        );
+    }
+
+    #[test]
+    fn choosing_a_version_applies_its_preset() {
+        let mut a = app();
+        select(&mut a, Field::Version);
+        while a.opts.version != AwgVersion::V3_1 {
+            a.adjust(1);
+        }
+        assert!(a.opts.random_trailers && a.opts.disable_h);
+        assert_eq!(a.opts.mimic.mtu, 1280);
+        let p = a.params.as_ref().unwrap();
+        assert_eq!(p.h_range(0).hi, 1, "plain headers on 3.1");
+    }
+
+    #[test]
+    fn an_older_client_build_brings_its_own_limits() {
+        let mut a = app();
+        a.client_idx = versions::CLIENTS
+            .iter()
+            .position(|c| c.id == "amneziawg-windows")
+            .unwrap();
+        assert_eq!(a.client().max_h_value, u32::MAX);
+        select(&mut a, Field::Release);
+        a.adjust(1);
+        assert_eq!(a.client().max_h_value, 2_147_483_647);
+        assert_eq!(
+            a.opts.client.max_h_value, 2_147_483_647,
+            "generation targets it"
+        );
+        // Changing client goes back to that client's current build.
+        select(&mut a, Field::Client);
+        a.adjust(1);
+        assert_eq!(a.release_idx, 0);
     }
 
     #[test]
