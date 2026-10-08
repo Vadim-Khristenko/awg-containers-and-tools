@@ -130,8 +130,8 @@ strings! {
         "имя хоста для мимикрии вместо выбранного из встроенных списков"
     ),
     OptBrowser => (
-        "match a browser's measured packet sizes: chrome | edge | firefox | safari | yandex-desktop | yandex-mobile",
-        "подогнать размеры пакетов под браузер: chrome | edge | firefox | safari | yandex-desktop | yandex-mobile"
+        "match a browser's measured packet sizes: chrome | edge | firefox | safari | ios | yandex-desktop | yandex-mobile | 360 | qq",
+        "подогнать размеры пакетов под браузер: chrome | edge | firefox | safari | ios | yandex-desktop | yandex-mobile | 360 | qq"
     ),
     OptMimicAll => (
         "build all five packets from the profile, not just I1",

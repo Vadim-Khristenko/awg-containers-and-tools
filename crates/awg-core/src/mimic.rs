@@ -176,18 +176,27 @@ pub enum BrowserProfile {
     Edge,
     Firefox,
     Safari,
+    /// Safari on iOS: the same WebKit networking stack, so Safari's sizes.
+    Ios,
     YandexDesktop,
     YandexMobile,
+    /// 360 and QQ are Chromium forks with an unmodified QUIC stack, so their
+    /// datagrams are Chromium's until somebody patches the network layer.
+    Browser360,
+    Qq,
 }
 
 impl BrowserProfile {
-    pub const ALL: [BrowserProfile; 6] = [
+    pub const ALL: [BrowserProfile; 9] = [
         BrowserProfile::Chrome,
         BrowserProfile::Edge,
         BrowserProfile::Firefox,
         BrowserProfile::Safari,
+        BrowserProfile::Ios,
         BrowserProfile::YandexDesktop,
         BrowserProfile::YandexMobile,
+        BrowserProfile::Browser360,
+        BrowserProfile::Qq,
     ];
 
     pub fn id(&self) -> &'static str {
@@ -196,8 +205,11 @@ impl BrowserProfile {
             BrowserProfile::Edge => "edge",
             BrowserProfile::Firefox => "firefox",
             BrowserProfile::Safari => "safari",
+            BrowserProfile::Ios => "ios",
             BrowserProfile::YandexDesktop => "yandex-desktop",
             BrowserProfile::YandexMobile => "yandex-mobile",
+            BrowserProfile::Browser360 => "360",
+            BrowserProfile::Qq => "qq",
         }
     }
 
@@ -215,6 +227,8 @@ impl BrowserProfile {
                 | BrowserProfile::Edge
                 | BrowserProfile::YandexDesktop
                 | BrowserProfile::YandexMobile
+                | BrowserProfile::Browser360
+                | BrowserProfile::Qq
         )
     }
 
@@ -222,7 +236,10 @@ impl BrowserProfile {
     fn range(&self, slot: BfpSlot) -> (u32, u32) {
         //                 qi            q0            h3            tls         nx            dtls
         let row: [(u32, u32); 6] = match self {
-            BrowserProfile::Chrome | BrowserProfile::Edge => [
+            BrowserProfile::Chrome
+            | BrowserProfile::Edge
+            | BrowserProfile::Browser360
+            | BrowserProfile::Qq => [
                 (1250, 1250),
                 (1250, 1350),
                 (1250, 1350),
@@ -238,7 +255,7 @@ impl BrowserProfile {
                 (1200, 1250),
                 (1050, 1200),
             ],
-            BrowserProfile::Safari => [
+            BrowserProfile::Safari | BrowserProfile::Ios => [
                 (1250, 1252),
                 (1250, 1300),
                 (1250, 1350),
@@ -707,6 +724,32 @@ mod tests {
             b.windows(wire.len()).any(|w| w == wire),
             "the query name is not encoded as DNS labels: {b:02x?}"
         );
+    }
+
+    #[test]
+    fn derived_browsers_inherit_the_stack_they_ship() {
+        let slots = [
+            BfpSlot::Qi,
+            BfpSlot::Q0,
+            BfpSlot::H3,
+            BfpSlot::Tls,
+            BfpSlot::Nx,
+            BfpSlot::Dtls,
+        ];
+        for slot in slots {
+            let chrome = BrowserProfile::Chrome.range(slot);
+            assert_eq!(BrowserProfile::Browser360.range(slot), chrome);
+            assert_eq!(BrowserProfile::Qq.range(slot), chrome);
+            assert_eq!(
+                BrowserProfile::Ios.range(slot),
+                BrowserProfile::Safari.range(slot)
+            );
+        }
+        assert!(BrowserProfile::Qq.is_chromium() && BrowserProfile::Browser360.is_chromium());
+        assert!(!BrowserProfile::Ios.is_chromium());
+        for id in ["ios", "360", "qq"] {
+            assert_eq!(BrowserProfile::parse(id).map(|b| b.id()), Some(id));
+        }
     }
 
     #[test]
