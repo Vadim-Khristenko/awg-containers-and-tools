@@ -293,35 +293,61 @@ fn quic_pad(
     calc_padding(rng, prefix.len() + 2 + pn_len, extra_b, range, iv, mtu)
 }
 
+/// TLS record header: content type, legacy version, and the length that follows.
+const TLS_RECORD_HEADER: u32 = 5;
+/// What the `<b>` blob writes of the ClientHello: handshake type and its
+/// three-byte length, legacy version, and the 32-byte client random.
+const TLS_HELLO_PREFIX: u32 = 1 + 3 + 2 + 32;
+/// A handshake body length excludes its own type and length bytes.
+const TLS_HANDSHAKE_HEADER: u32 = 4;
+
+/// A TLS 1.3 ClientHello: record layer per RFC 8446 §5.1, handshake per §4.1.2.
+///
+/// Both length fields are computed. The record declares how many bytes follow
+/// it and the handshake declares its own body; both used to be drawn at random,
+/// so the record claimed one size while the packet carried another, which is
+/// the first thing anything parsing TLS checks. Everything after the `<b>`
+/// blob is inside the record (the SNI-sized `<rc>`, the `<r>` padding, the
+/// counter and timestamp), so the padding is decided first and the lengths
+/// written around it.
 pub(super) fn tls_client_hello(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
     let host = opts.host(rng, super::hosts::TLS_CLIENT_HELLO);
-    // The server_name extension around the host: ext type, ext len, list len,
-    // name type, name len, name.
+    // server_name extension: ext type, ext len, list len, name type, name len.
     let sni_ext = 2 + 2 + 2 + 1 + 2 + host.len() as u32;
     let sni_rc = sni_ext.min(64);
 
-    let fp_range = opts.fp_range(BfpSlot::Tls);
-    let base_len = match fp_range {
+    let base_len = match opts.fp_range(BfpSlot::Tls) {
         Some((lo, hi)) => rng.range(lo, hi),
         None => rng.range(300, 550),
     };
-    let rec_len = if opts.browser.is_some_and(|b| b.is_chromium()) {
+    // Chromium pads its ClientHello to a multiple of 128 bytes, which is part
+    // of what makes a Chrome handshake look like one.
+    let target = if opts.browser.is_some_and(|b| b.is_chromium()) {
         align_to_128(base_len)
     } else {
         base_len
     };
-    // The handshake message sits inside the record, minus the record header.
-    let hs_len = rec_len.saturating_sub(rng.range(4, 9));
 
-    let r_len = (rng.range(20, 60) * iv)
-        .min(300)
-        .min(opts.mtu.saturating_sub(44 + sni_rc + tag_overhead(opts)));
+    let tag_bytes = if opts.tag_rc { sni_rc } else { 0 } + tag_overhead(opts);
+    let fixed = TLS_RECORD_HEADER + TLS_HELLO_PREFIX + tag_bytes;
+    let padding = if opts.tag_r {
+        let drawn = (rng.range(20, 60) * iv).min(300);
+        target
+            .saturating_sub(fixed)
+            .min(opts.mtu.saturating_sub(fixed))
+            .min(drawn)
+    } else {
+        0
+    };
+
+    let record_len = TLS_HELLO_PREFIX + tag_bytes + padding;
+    let handshake_len = record_len - TLS_HANDSHAKE_HEADER;
 
     let mut b = Buf::new();
     b.lit(&[0x16, 0x03, 0x01]) // handshake record, legacy version TLS 1.0
-        .be(rec_len, 2)
+        .be(record_len, 2)
         .lit(&[0x01]) // ClientHello
-        .be(hs_len, 3)
+        .be(handshake_len, 3)
         .lit(&[0x03, 0x03]) // legacy_version TLS 1.2, as TLS 1.3 requires
         .random(rng, 32); // client random
 
@@ -329,7 +355,7 @@ pub(super) fn tls_client_hello(rng: &mut impl Rng, opts: &MimicOptions, iv: u32)
     c.push(b.into_tag())
         .push_if(opts.tag_rc, Tag::RandomLetters(sni_rc));
     if opts.tag_r {
-        c.push_padding(r_len, PadKind::Bytes);
+        c.push_padding(padding, PadKind::Bytes);
     }
     c.push_if(opts.tag_c, Tag::Counter)
         .push_if(opts.tag_t, Tag::Timestamp);
@@ -688,6 +714,36 @@ mod tests {
                     );
                     assert!(pkt.len() as u32 <= opts.mtu, "{name}: over the MTU");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn the_client_hello_record_and_handshake_lengths_are_true() {
+        for opts in [
+            all_tags(),
+            MimicOptions::default(),
+            MimicOptions {
+                tag_r: false,
+                ..all_tags()
+            },
+            MimicOptions {
+                browser: Some(super::super::BrowserProfile::Chrome),
+                ..all_tags()
+            },
+        ] {
+            for seed in 0..200u64 {
+                let mut rng = SeededRng::new(seed);
+                let pkt = tls_client_hello(&mut rng, &opts, 2).materialize(&mut rng, 3, 4);
+                assert_eq!(&pkt[..3], &[0x16, 0x03, 0x01], "handshake record");
+                let record = usize::from(u16::from_be_bytes([pkt[3], pkt[4]]));
+                assert_eq!(record, pkt.len() - 5, "seed {seed}: record length lies");
+                assert_eq!(pkt[5], 0x01, "ClientHello");
+                let hs =
+                    (usize::from(pkt[6]) << 16) | (usize::from(pkt[7]) << 8) | usize::from(pkt[8]);
+                assert_eq!(hs, record - 4, "seed {seed}: handshake length lies");
+                assert_eq!(&pkt[9..11], &[0x03, 0x03]);
+                assert!(pkt.len() as u32 <= opts.mtu);
             }
         }
     }
