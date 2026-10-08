@@ -12,6 +12,7 @@
 //! `assertEvenHex`: it works in bytes, so half a byte is unrepresentable.
 
 use super::dsl::{Chain, PadKind, Tag};
+use super::hostdb::{DnsType, Role};
 use super::{BfpSlot, MimicOptions};
 use crate::rng::Rng;
 
@@ -133,7 +134,7 @@ fn align_to_128(n: u32) -> u32 {
 /// packet number length minus one. A client's first Initial carries a
 /// Destination Connection ID of at least 8 bytes (§7.2); both IDs cap at 20.
 pub(super) fn quic_initial(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
-    let host = opts.host(rng, super::hosts::QUIC_INITIAL);
+    let host = opts.host(rng, Role::Quic, None);
     let dcid = rng.range(8, 20);
     let scid = rng.range(0, 20);
     // Half of all real Initials carry no token at all.
@@ -182,7 +183,7 @@ pub(super) fn quic_initial(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> 
 /// A QUIC 0-RTT packet, per RFC 9000 §17.2.3: type `01` and, unlike an
 /// Initial, no token field.
 pub(super) fn quic_0rtt(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
-    let host = opts.host(rng, super::hosts::QUIC_0RTT);
+    let host = opts.host(rng, Role::Quic, None);
     let dcid = rng.range(8, 20);
     let scid = rng.range(0, 20);
     let ticket_hint = (host.len() as u32 + rng.range(4, 16)).min(48);
@@ -227,7 +228,7 @@ pub(super) fn quic_0rtt(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Cha
 /// from both types and writing one structure for all of them gave half the
 /// packets a field their own type says is not there.
 pub(super) fn http3(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
-    let host = opts.host(rng, super::hosts::QUIC_INITIAL);
+    let host = opts.host(rng, Role::Quic, None);
     let dcid = rng.range(8, 20);
     let scid = rng.range(0, 20);
     // +9 for the `:authority` framing a real HEADERS frame puts around the host.
@@ -311,7 +312,7 @@ const TLS_HANDSHAKE_HEADER: u32 = 4;
 /// counter and timestamp), so the padding is decided first and the lengths
 /// written around it.
 pub(super) fn tls_client_hello(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
-    let host = opts.host(rng, super::hosts::TLS_CLIENT_HELLO);
+    let host = opts.host(rng, Role::Tls, None);
     // server_name extension: ext type, ext len, list len, name type, name len.
     let sni_ext = 2 + 2 + 2 + 1 + 2 + host.len() as u32;
     let sni_rc = sni_ext.min(64);
@@ -405,7 +406,7 @@ pub(super) fn dtls13(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain 
 /// whole body, and a record length that describes what it precedes, tags
 /// included.
 fn dtls_flight(rng: &mut impl Rng, opts: &MimicOptions, iv: u32, body: Vec<u8>) -> Chain {
-    let host = opts.host(rng, super::hosts::DTLS);
+    let host = opts.host(rng, Role::Dtls, None);
     let sni_rc = (host.len() as u32 + rng.range(2, 8)).min(60);
     let tag_bytes = if opts.tag_rc { sni_rc } else { 0 } + tag_overhead(opts);
 
@@ -471,7 +472,7 @@ fn dtls_flight(rng: &mut impl Rng, opts: &MimicOptions, iv: u32, body: Vec<u8>) 
 /// exactly this, to keep a request inside one datagram; here it keeps five of
 /// them inside the kernel module's netlink budget.
 pub(super) fn sip(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
-    let host = opts.host(rng, super::hosts::SIP);
+    let host = opts.host(rng, Role::Sip, None);
     let user = format!("user{}", rng.range(1000, 9999));
 
     let rc_val = (host.len() as u32 + rng.range(8, 24) * iv).min(150);
@@ -585,7 +586,13 @@ fn dns_name(host: &str) -> Vec<u8> {
 pub(super) fn dns_query(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
     // A on even iterations, AAAA on odd: a resolver asks for both in practice.
     let wants_ipv6 = !iv.is_multiple_of(2);
-    let host = opts.host(rng, super::hosts::DNS);
+    // The name has to be one that answers the type being asked.
+    let qtype = if wants_ipv6 {
+        DnsType::Aaaa
+    } else {
+        DnsType::A
+    };
+    let host = opts.host(rng, Role::Dns, Some(qtype));
     let question_len = dns_name(&host).len() as u32 + 4;
 
     // Below about 83 the bounds cross; a tiny MTU gets no padding, not a panic.

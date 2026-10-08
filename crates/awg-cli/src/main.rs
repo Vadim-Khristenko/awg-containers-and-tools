@@ -14,6 +14,7 @@ mod tui;
 
 use awg_core::awg3::Intensity;
 use awg_core::engines::Engine;
+use awg_core::mimic::hostdb::{self, HostQuery, Region, Role};
 use awg_core::mimic::{BrowserProfile, MimicOptions, MimicProfile};
 use awg_core::rng::SecureRng;
 use awg_core::versions::{self, AwgVersion, GenOptions, Level};
@@ -30,6 +31,7 @@ fn main() {
         Some("gen") | Some("generate") => cmd_gen(&args, lang),
         Some("clients") => cmd_clients(lang),
         Some("profiles") => cmd_profiles(lang),
+        Some("hosts") => cmd_hosts(&args, lang),
         Some("status") => ops::cmd_status(&args, lang),
         Some("logs") => ops::cmd_logs(&args, lang),
         Some("doctor") | Some("diagnose") => ops::cmd_doctor(&args, lang),
@@ -144,6 +146,7 @@ fn usage(lang: Lang) {
     println!("  awg-tool clients");
     println!("      {}", t(lang, K::CmdClients));
     println!("  awg-tool profiles");
+    println!("  awg-tool hosts [--role quic] [--region ru] [--whitelisted ru] [--unknown]");
     println!("      {}", t(lang, K::CmdProfiles));
     println!("  awg-tool status [--server NAME | --host ADDR]");
     println!("      {}", t(lang, K::CmdStatus));
@@ -178,6 +181,10 @@ fn usage(lang: Lang) {
     println!("  --router             {}", t(lang, K::OptRouter));
     println!("  --mtu 1500           {}", t(lang, K::OptMtu));
     println!("  --host example.com   {}", t(lang, K::OptHost));
+    println!("  --region ru          {}", t(lang, K::OptRegion));
+    println!("  --whitelisted ru     {}", t(lang, K::OptWhitelisted));
+    println!("  --role quic          {}", t(lang, K::OptRole));
+    println!("  --unknown            {}", t(lang, K::OptUnknown));
     println!("  --browser chrome     {}", t(lang, K::OptBrowser));
     println!("  --mimic-all          {}", t(lang, K::OptMimicAll));
     println!("  --tag-c              {}", t(lang, K::OptTagC));
@@ -262,6 +269,9 @@ fn cmd_gen(args: &[String], lang: Lang) {
         },
     };
 
+    let region = region_flag(args, "--region", lang);
+    let whitelisted_in = region_flag(args, "--whitelisted", lang);
+
     let browser = match flag_value(args, "--browser") {
         None => None,
         Some(raw) => match BrowserProfile::parse(&raw) {
@@ -323,6 +333,8 @@ fn cmd_gen(args: &[String], lang: Lang) {
             mtu,
             mimic_all: has_flag(args, "--mimic-all"),
             custom_host: flag_value(args, "--host"),
+            region,
+            whitelisted_in,
             // Kept so old scripts still parse; generate() decides <c> from the
             // engines on both ends.
             tag_c: has_flag(args, "--tag-c"),
@@ -502,6 +514,57 @@ fn cmd_about(lang: Lang) {
     println!("{}", t(lang, K::WhyUnique));
     println!();
     println!("{}", t(lang, K::Unofficial));
+}
+
+/// `--region`/`--whitelisted`: a region, or `any` (the same as leaving it out).
+fn region_flag(args: &[String], flag: &str, lang: Lang) -> Option<Region> {
+    let raw = flag_value(args, flag)?;
+    if raw.trim().eq_ignore_ascii_case("any") {
+        return None;
+    }
+    match Region::parse(&raw) {
+        Some(r) => Some(r),
+        None => {
+            let mut valid: Vec<&str> = Region::ALL.iter().map(|r| r.id()).collect();
+            valid.push("any");
+            bail(lang, K::ErrUnknownRegion, &raw, &valid);
+        }
+    }
+}
+
+/// What the mimicry profiles may name, so a pool can be looked at before it
+/// is used: `awg-tool hosts --role quic --region ru`.
+fn cmd_hosts(args: &[String], lang: Lang) {
+    let roles: Vec<Role> = match flag_value(args, "--role") {
+        None => Role::ALL.to_vec(),
+        Some(raw) => match Role::ALL.into_iter().find(|r| r.id() == raw.trim()) {
+            Some(r) => vec![r],
+            None => {
+                let valid: Vec<&str> = Role::ALL.iter().map(|r| r.id()).collect();
+                bail(lang, K::ErrUnknownRole, &raw, &valid);
+            }
+        },
+    };
+    let region = region_flag(args, "--region", lang);
+    let whitelisted_in = region_flag(args, "--whitelisted", lang);
+    let allow_unknown = has_flag(args, "--unknown");
+    let list = roles.len() == 1;
+
+    println!("{}:", t(lang, K::CmdHosts));
+    for role in roles {
+        let found = hostdb::hosts_for(&HostQuery {
+            region,
+            whitelisted_in,
+            allow_unknown,
+            ..HostQuery::new(role)
+        });
+        println!("  {:<6} {}", role.id(), found.len());
+        if list {
+            for host in found.iter() {
+                println!("    {host}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]

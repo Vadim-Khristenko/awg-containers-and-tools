@@ -16,7 +16,7 @@
 //! because that is all a DPI box gets to look at before it has to make a call.
 
 pub mod dsl;
-mod hosts;
+pub mod hostdb;
 mod profiles;
 pub mod stun;
 
@@ -299,15 +299,16 @@ pub struct MimicOptions {
     pub mtu: u32,
     /// Build all five packets from the profile instead of only I1.
     pub mimic_all: bool,
-    /// Override the host pool with one name. Only its length reaches the packet
-    /// for most profiles; a DNS query embeds it verbatim.
+    /// Override the host database with one name. Only its length reaches the
+    /// packet for most profiles; DNS, SIP and TURN embed it verbatim.
     pub custom_host: Option<String>,
-    /// `<c>` — off by default, because the tag belongs to exactly one
-    /// generation: only the 1.5 parser has a builder for it, and from v0.2.16
-    /// chains are parsed by `device/obf.go`, whose table has no `c` at all.
-    /// That is the ErrorCode 1000 people report. Callers going through
-    /// [`crate::versions::generate`] do not set this themselves — the version
-    /// decides, see [`crate::versions::AwgVersion::chain_tags`].
+    /// Where the named hosts should be plausible; `None` is any region.
+    pub region: Option<hostdb::Region>,
+    /// Only name hosts on this region's whitelist.
+    pub whitelisted_in: Option<hostdb::Region>,
+    /// `<c>`: exists in the 1.5 parser and the kernel module only. Callers going
+    /// through [`crate::versions::generate`] do not set this themselves; the
+    /// engines on both ends decide, see [`crate::engines`].
     pub tag_c: bool,
     pub tag_t: bool,
     pub tag_r: bool,
@@ -319,7 +320,7 @@ pub struct MimicOptions {
     /// packets it will struggle to send in time.
     pub router_mode: bool,
     /// Failed-attempt counter. Past three, everything is generated one notch
-    /// stronger — the previous set was evidently recognised.
+    /// stronger: the previous set was evidently recognised.
     pub iter_count: u32,
     /// Ask profiles for their shorter form, when they have one. Set by the
     /// generator, not by the user: it is what a chain set that would not fit
@@ -333,6 +334,8 @@ impl Default for MimicOptions {
             mtu: 1500,
             mimic_all: false,
             custom_host: None,
+            region: None,
+            whitelisted_in: None,
             tag_c: false,
             tag_t: true,
             tag_r: true,
@@ -347,13 +350,26 @@ impl Default for MimicOptions {
 }
 
 impl MimicOptions {
-    fn host(&self, rng: &mut impl Rng, pool: &[&'static str]) -> String {
+    /// A name for a packet: the custom host when one was given, otherwise one
+    /// from the database that meets what the profile needs.
+    fn host(
+        &self,
+        rng: &mut impl Rng,
+        role: hostdb::Role,
+        dns_type: Option<hostdb::DnsType>,
+    ) -> String {
         if let Some(h) = self.custom_host.as_deref().map(str::trim)
             && !h.is_empty()
         {
             return h.to_string();
         }
-        pool[rng.range(0, pool.len() as u32 - 1) as usize].to_string()
+        let query = hostdb::HostQuery {
+            region: self.region,
+            whitelisted_in: self.whitelisted_in,
+            dns_type,
+            ..hostdb::HostQuery::new(role)
+        };
+        hostdb::pick(rng, &query).to_string()
     }
 
     fn fp_range(&self, slot: BfpSlot) -> Option<(u32, u32)> {
@@ -390,7 +406,7 @@ fn build_one(rng: &mut impl Rng, profile: MimicProfile, opts: &MimicOptions, iv:
         MimicProfile::DnsQuery => profiles::dns_query(rng, opts, iv),
         // Alone it is the authenticated Allocate, the one packet that names a host.
         MimicProfile::Stun => {
-            let host = opts.host(rng, hosts::STUN);
+            let host = opts.host(rng, hostdb::Role::Stun, None);
             stun::build(rng, opts, &host, stun::StunVariant::AllocateAuth)
         }
         // The composites reuse the first packet of their pair when asked for a
@@ -432,7 +448,7 @@ pub fn generate_chain_set(
         }
         MimicProfile::Stun if opts.mimic_all => {
             // The flow a WebRTC client walks through, one packet per slot.
-            let host = opts.host(rng, hosts::STUN);
+            let host = opts.host(rng, hostdb::Role::Stun, None);
             stun::STUN_FLOW.map(|v| stun::build(rng, opts, &host, v))
         }
         MimicProfile::DnsQuery => {

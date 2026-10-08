@@ -116,6 +116,28 @@ strings! {
     StatusGenerated => ("Fresh parameters generated", "Сгенерирован новый набор параметров"),
     CmdClients => ("supported clients and their limits", "поддерживаемые клиенты и их ограничения"),
     CmdProfiles => ("available mimicry profiles", "доступные профили мимикрии"),
+    CmdHosts => (
+        "hosts the mimicry profiles may name, by role and region",
+        "хосты, которые могут называть профили мимикрии, по ролям и регионам"
+    ),
+    OptRegion => (
+        "where the named hosts should be plausible: ru | global | eu | uk | by | cn | any (default any)",
+        "где названные хосты правдоподобны: ru | global | eu | uk | by | cn | any (по умолчанию any)"
+    ),
+    OptWhitelisted => (
+        "only name hosts on this region's whitelist (what still works when the network is cut down)",
+        "называть только хосты из белого списка региона (то, что работает при ограничениях сети)"
+    ),
+    OptRole => (
+        "for `hosts`: quic | tls | dtls | sip | stun | dns",
+        "для `hosts`: quic | tls | dtls | sip | stun | dns"
+    ),
+    OptUnknown => (
+        "for `hosts`: include hosts whose facts were never established",
+        "для `hosts`: включить хосты, про которые ничего не установлено"
+    ),
+    ErrUnknownRegion => ("unknown region", "неизвестный регион"),
+    ErrUnknownRole => ("unknown role", "неизвестная роль"),
     OptProfile => (
         "protocol the I1 packet imitates (see `awg-tool profiles`)",
         "протокол, под который маскируется пакет I1 (см. `awg-tool profiles`)"
