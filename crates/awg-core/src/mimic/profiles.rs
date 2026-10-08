@@ -369,18 +369,20 @@ const DTLS_RECORD_HEADER: u32 = 1 + 2 + 2 + 6 + 2;
 /// fragment length. Both versions frame the first flight the same way.
 const DTLS_HANDSHAKE_HEADER: u32 = 1 + 3 + 2 + 3 + 3;
 
-/// The ClientHello tail a DTLS 1.3 client sends after its random, RFC 9147
-/// §5.3: empty session id, empty cookie (a 1.3-only client sends zero
-/// length), the three DTLS-OK TLS 1.3 suites, null compression, and one
-/// supported_versions extension announcing 0xfefc. The version fields on the
-/// wire stay 0xfefd; that is what the RFC asks for.
+/// The ClientHello a DTLS 1.3 client sends after its random, RFC 9147 §5.3, up
+/// to the extensions: empty session id, empty cookie (a 1.3-only client sends
+/// zero length), the three DTLS-OK TLS 1.3 suites, null compression. The
+/// version fields on the wire stay 0xfefd; that is what the RFC asks for.
 const DTLS13_TAIL: &[u8] = &[
     0x00, 0x00, // session id, cookie: both empty
     0x00, 0x06, 0x13, 0x01, 0x13, 0x02, 0x13, 0x03, // suites
     0x01, 0x00, // compression: null
-    0x00, 0x07, // extensions length
-    0x00, 0x2b, 0x00, 0x03, 0x02, 0xfe, 0xfc, // supported_versions: DTLS 1.3
 ];
+
+/// supported_versions announcing DTLS 1.3: type 0x002b, length 3, a one-byte
+/// list length of 2, then 0xfefc. The extensions length in front of it is
+/// written by [`dtls_flight`], which also counts what the tags add after it.
+const DTLS13_EXTENSIONS: &[u8] = &[0x00, 0x2b, 0x00, 0x03, 0x02, 0xfe, 0xfc];
 
 /// A DTLS 1.2 ClientHello: client version 0xfefd (ones' complement, so DTLS
 /// counts down where TLS counts up) and the 32-byte random. RFC 6347 §4.1,
@@ -388,14 +390,15 @@ const DTLS13_TAIL: &[u8] = &[
 pub(super) fn dtls12(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
     let mut body = Buf::new();
     body.lit(&[0xfe, 0xfd]).random(rng, 32);
-    dtls_flight(rng, opts, iv, body.0)
+    dtls_flight(rng, opts, iv, body.0, None)
 }
 
-/// A DTLS 1.3 ClientHello: legacy_version, random, and the §5.3 tail.
+/// A DTLS 1.3 ClientHello: legacy_version, random, the §5.3 tail and its
+/// extensions.
 pub(super) fn dtls13(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain {
     let mut body = Buf::new();
     body.lit(&[0xfe, 0xfd]).random(rng, 32).lit(DTLS13_TAIL);
-    dtls_flight(rng, opts, iv, body.0)
+    dtls_flight(rng, opts, iv, body.0, Some(DTLS13_EXTENSIONS))
 }
 
 /// One unfragmented DTLS first flight around a ClientHello body.
@@ -405,12 +408,28 @@ pub(super) fn dtls13(rng: &mut impl Rng, opts: &MimicOptions, iv: u32) -> Chain 
 /// variety. Message sequence 0, fragment offset 0, fragment length equal to the
 /// whole body, and a record length that describes what it precedes, tags
 /// included.
-fn dtls_flight(rng: &mut impl Rng, opts: &MimicOptions, iv: u32, body: Vec<u8>) -> Chain {
+///
+/// A body that reaches its extensions block passes them in `extensions`. Then
+/// the extensions length is written here and covers the tag bytes too, which
+/// ride in a GREASE extension (RFC 8701) whose content a receiver must ignore,
+/// so the ClientHello parses to its last byte. Padding (RFC 7685) would be the
+/// obvious home, but its content has to be zeros and `<r>` is not. The shape
+/// matches Architect 4.5.1.
+fn dtls_flight(
+    rng: &mut impl Rng,
+    opts: &MimicOptions,
+    iv: u32,
+    mut body: Vec<u8>,
+    extensions: Option<&[u8]>,
+) -> Chain {
     let host = opts.host(rng, Role::Dtls, None);
     let sni_rc = (host.len() as u32 + rng.range(2, 8)).min(60);
     let tag_bytes = if opts.tag_rc { sni_rc } else { 0 } + tag_overhead(opts);
 
-    let fixed = DTLS_RECORD_HEADER + DTLS_HANDSHAKE_HEADER + body.len() as u32;
+    // Two bytes of extensions length and four of GREASE header, when there
+    // is an extensions block for the tags to extend.
+    let ext_overhead = extensions.map_or(0, |e| e.len() as u32 + 2 + 4);
+    let fixed = DTLS_RECORD_HEADER + DTLS_HANDSHAKE_HEADER + body.len() as u32 + ext_overhead;
     let padding = if opts.tag_r {
         calc_padding(
             rng,
@@ -423,7 +442,21 @@ fn dtls_flight(rng: &mut impl Rng, opts: &MimicOptions, iv: u32, body: Vec<u8>) 
     } else {
         0
     };
-    let body_len = body.len() as u32 + tag_bytes + padding;
+    let trail = tag_bytes + padding;
+    if let Some(ext) = extensions {
+        let mut grease = Vec::new();
+        if trail > 0 {
+            // One of 0x0a0a, 0x1a1a ... 0xfafa.
+            let n = rng.range(0, 15) as u8;
+            grease.extend_from_slice(&[(n << 4) | 0x0a, (n << 4) | 0x0a]);
+            grease.extend_from_slice(&(trail as u16).to_be_bytes());
+        }
+        let ext_len = ext.len() as u32 + grease.len() as u32 + trail;
+        body.extend_from_slice(&(ext_len as u16).to_be_bytes());
+        body.extend_from_slice(ext);
+        body.extend_from_slice(&grease);
+    }
+    let body_len = body.len() as u32 + trail;
     let record_len = DTLS_HANDSHAKE_HEADER + body_len;
 
     let mut b = Buf::new();
@@ -962,11 +995,52 @@ mod tests {
     }
 
     #[test]
-    fn the_dtls13_tail_declares_the_extensions_it_carries() {
-        // session id, cookie, suites, compression, then extensions.
-        let at = 2 + 8 + 2;
-        let declared = usize::from(u16::from_be_bytes([DTLS13_TAIL[at], DTLS13_TAIL[at + 1]]));
-        assert_eq!(declared, DTLS13_TAIL.len() - at - 2);
+    fn the_dtls13_client_hello_parses_to_its_last_byte() {
+        let combos = [
+            all_tags(),
+            MimicOptions::default(),
+            MimicOptions {
+                tag_r: false,
+                ..all_tags()
+            },
+            MimicOptions {
+                tag_r: false,
+                tag_rc: false,
+                tag_t: false,
+                ..MimicOptions::default()
+            },
+        ];
+        for opts in combos {
+            for seed in 0..100u64 {
+                let mut rng = SeededRng::new(seed);
+                let pkt = dtls13(&mut rng, &opts, 2).materialize(&mut rng, 1, 2);
+                let u16_at = |i: usize| usize::from(u16::from_be_bytes([pkt[i], pkt[i + 1]]));
+                // record 13 + handshake 12 + version 2 + random 32
+                let mut at = 59;
+                assert_eq!(pkt[at], 0, "empty session id");
+                assert_eq!(pkt[at + 1], 0, "empty cookie");
+                at += 2;
+                at += 2 + u16_at(at); // suites
+                at += 1 + usize::from(pkt[at]); // compression
+                let ext_len = u16_at(at);
+                at += 2;
+                assert_eq!(ext_len, pkt.len() - at, "seed {seed}: extensions length");
+                let mut types = Vec::new();
+                while at < pkt.len() {
+                    types.push(u16_at(at));
+                    at += 4 + u16_at(at + 2);
+                }
+                assert_eq!(
+                    at,
+                    pkt.len(),
+                    "seed {seed}: extensions end where the packet does"
+                );
+                assert_eq!(types[0], 0x002b, "supported_versions first");
+                for t in &types[1..] {
+                    assert_eq!(t & 0x0f0f, 0x0a0a, "only GREASE after it: {t:#06x}");
+                }
+            }
+        }
     }
 
     /// The text of a SIP chain's `<b>` and the body bytes its tags put after it.
