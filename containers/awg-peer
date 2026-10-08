@@ -55,7 +55,7 @@ conf_get() {
 # parameters, and values that differ are a handshake that never completes and
 # never says why.
 conf_obfuscation() {
-    grep -E '^[[:space:]]*(H[1-4]|S[1-4]|Jc|Jmin|Jmax|I[1-5]|Itime|HeaderProtectionKey|ContentPaddingAddition|RekeyAfterTime|RekeyTimeout|RejectAfterTime|KeepaliveTimeout|MaxHandshakeAttempts)[[:space:]]*=' "$CONF" || true
+    grep -E '^[[:space:]]*(H[1-4]|S[1-4]|Jc|Jmin|Jmax|I[1-5]|Itime|HeaderProtectionKey|ContentPaddingAddition|RekeyAfterTime|RekeyTimeout|RejectAfterTime|KeepaliveTimeout|MaxHandshakeAttempts|RandomTrailers|DisableCookies)[[:space:]]*=' "$CONF" || true
 }
 
 peer_file() { printf '%s/%s.peer' "$PEERS_DIR" "$1"; }

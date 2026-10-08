@@ -914,7 +914,7 @@ mod tests {
     /// Pinned here because that shell function and this renderer have to agree.
     /// A field the renderer emits and the grep misses is a field the client
     /// never receives — and, again, a handshake that simply never completes.
-    const PEER_TOOL_FIELDS: [&str; 24] = [
+    const PEER_TOOL_FIELDS: [&str; 26] = [
         "H1",
         "H2",
         "H3",
@@ -939,6 +939,8 @@ mod tests {
         "RejectAfterTime",
         "KeepaliveTimeout",
         "MaxHandshakeAttempts",
+        "RandomTrailers",
+        "DisableCookies",
     ];
 
     fn key_material(seed: u8) -> String {
@@ -1041,26 +1043,61 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    /// The field names `conf_obfuscation` in `containers/awg-peer` greps for,
+    /// read out of the script itself rather than restated here.
+    fn peer_tool_fields() -> Vec<String> {
+        const SCRIPT: &str = include_str!("../../../../containers/awg-peer");
+        let body = SCRIPT
+            .split("conf_obfuscation() {")
+            .nth(1)
+            .expect("awg-peer defines conf_obfuscation");
+        let open = "[[:space:]]*(";
+        let start = body.find(open).expect("the field alternation") + open.len();
+        let end = start + body[start..].find(")[[:space:]]*=").expect("its end");
+        let mut out = Vec::new();
+        for alt in body[start..end].split('|') {
+            // `H[1-4]` and the like: a prefix and a digit range.
+            match alt.split_once('[') {
+                Some((prefix, range)) => {
+                    let (lo, hi) = range.trim_end_matches(']').split_once('-').unwrap();
+                    let (lo, hi) = (lo.parse::<u8>().unwrap(), hi.parse::<u8>().unwrap());
+                    out.extend((lo..=hi).map(|d| format!("{prefix}{d}")));
+                }
+                None => out.push(alt.to_string()),
+            }
+        }
+        out
+    }
+
     #[test]
     fn the_shell_peer_tool_copies_every_field_the_renderer_emits() {
         // `awg-peer add` reissues the block by grepping the server config. If
         // the renderer ever grows a field that grep does not name, the field
-        // silently stops reaching clients.
-        let server = interface_block(&server_conf(&spec(), &tunnel(33), &keys()));
-        let per_node = ["PrivateKey", "Address", "ListenPort", "MTU"];
-        for key in server.keys() {
+        // silently stops reaching clients, and a 3.1 client without the
+        // server's RandomTrailers never completes a handshake.
+        let copied = peer_tool_fields();
+        assert!(copied.len() >= PEER_TOOL_FIELDS.len());
+        for f in PEER_TOOL_FIELDS {
             assert!(
-                per_node.contains(&key.as_str()) || PEER_TOOL_FIELDS.contains(&key.as_str()),
-                "{key} is in the server config but containers/awg-peer does not copy it"
+                copied.iter().any(|c| c == f),
+                "the script no longer copies {f}"
             );
         }
-        // ...and the shared block is not empty by accident.
-        assert!(
-            server
-                .keys()
-                .filter(|k| PEER_TOOL_FIELDS.contains(&k.as_str()))
-                .count()
-                >= 18
-        );
+        let per_node = ["PrivateKey", "Address", "ListenPort", "MTU"];
+        for version in AwgVersion::ALL {
+            let opts = GenOptions {
+                disable_cookies: true,
+                ..GenOptions::for_version(version)
+            };
+            let t = Tunnel::generate(&mut SeededRng::new(33), &opts).unwrap();
+            let server = interface_block(&server_conf(&spec(), &t, &keys()));
+            for key in server.keys() {
+                assert!(
+                    per_node.contains(&key.as_str()) || copied.contains(key),
+                    "AWG {version}: {key} is in the server config but containers/awg-peer \
+                     does not copy it"
+                );
+            }
+        }
     }
 }

@@ -17,7 +17,7 @@ use super::health::UapiDevice;
 
 /// The obfuscation keys in UAPI spelling. This is the set both ends of a tunnel
 /// have to agree on.
-pub const OBFUSCATION_UAPI_KEYS: [&str; 27] = [
+pub const OBFUSCATION_UAPI_KEYS: [&str; 29] = [
     "jc",
     "jmin",
     "jmax",
@@ -45,10 +45,12 @@ pub const OBFUSCATION_UAPI_KEYS: [&str; 27] = [
     "reject_after_time",
     "keepalive_timeout",
     "max_handshake_attempts",
+    "random_trailers",
+    "disable_cookies",
 ];
 
 /// `.conf` spelling paired with the UAPI spelling, for the same set.
-pub const OBFUSCATION_CONF_KEYS: [(&str, &str); 27] = [
+pub const OBFUSCATION_CONF_KEYS: [(&str, &str); 29] = [
     ("Jc", "jc"),
     ("Jmin", "jmin"),
     ("Jmax", "jmax"),
@@ -76,6 +78,8 @@ pub const OBFUSCATION_CONF_KEYS: [(&str, &str); 27] = [
     ("RejectAfterTime", "reject_after_time"),
     ("KeepaliveTimeout", "keepalive_timeout"),
     ("MaxHandshakeAttempts", "max_handshake_attempts"),
+    ("RandomTrailers", "random_trailers"),
+    ("DisableCookies", "disable_cookies"),
 ];
 
 /// One field the two ends do not agree on.
@@ -104,9 +108,24 @@ impl ObfuscationComparison {
     }
 }
 
+/// The 3.1 switches. A 3.1 daemon reports both as `0` or `1` whether or not
+/// they were set, while a `.conf` leaves an off switch out entirely, so off is
+/// spelled the same way on both sides: absent.
+const SWITCHES: [&str; 2] = ["random_trailers", "disable_cookies"];
+
+/// amneziawg-tools `parse_bool`, and Go's `strconv.ParseBool` on the daemon side.
+fn switch_on(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on" | "t"
+    )
+}
+
 /// The obfuscation block out of a live device.
 pub fn obfuscation_from_uapi(dev: &UapiDevice) -> BTreeMap<String, String> {
-    dev.obfuscation.clone()
+    let mut out = dev.obfuscation.clone();
+    out.retain(|k, v| !SWITCHES.contains(&k.as_str()) || switch_on(v));
+    out
 }
 
 /// The obfuscation block out of a `.conf`, normalised to UAPI names.
@@ -132,7 +151,11 @@ pub fn obfuscation_from_conf(conf: &str) -> BTreeMap<String, String> {
         };
         let (k, v) = (k.trim(), v.trim());
         let Some(uapi) = names.get(k) else { continue };
-        if *uapi == "header_protection_key" {
+        if SWITCHES.contains(uapi) {
+            if switch_on(v) {
+                out.insert((*uapi).to_string(), "1".to_string());
+            }
+        } else if *uapi == "header_protection_key" {
             let bytes = B64.decode(v).map(|b| b.len()).unwrap_or(0);
             out.insert((*uapi).to_string(), format!("<{bytes} bytes>"));
         } else {
@@ -214,6 +237,32 @@ mod tests {
         assert!(c.agreed.contains(&"header_protection_key".to_string()));
         assert!(c.agreed.contains(&"jc".to_string()));
         assert_eq!(c.agreed.len(), 14, "every field the fixture carries");
+    }
+
+    #[test]
+    fn the_3_1_switches_are_compared_and_off_matches_absent() {
+        // A 3.1 daemon reports both switches whatever was set.
+        let live = |trailers: &str| {
+            let text = UAPI.replacen(
+                "jc=",
+                &format!("random_trailers={trailers}\ndisable_cookies=0\njc="),
+                1,
+            );
+            obfuscation_from_uapi(&parse_uapi_get(&text))
+        };
+        let with = CLIENT_CONF.replacen("Jc = 5", "Jc = 5\nRandomTrailers = 1", 1);
+
+        assert!(compare_obfuscation(&live("1"), &obfuscation_from_conf(&with)).is_identical());
+        assert!(
+            compare_obfuscation(&live("0"), &obfuscation_from_conf(CLIENT_CONF)).is_identical()
+        );
+
+        // The case awg-peer used to produce: trailers on the server, none on
+        // the client. That is a tunnel that never handshakes.
+        let c = compare_obfuscation(&live("1"), &obfuscation_from_conf(CLIENT_CONF));
+        assert_eq!(c.server_only, ["random_trailers"]);
+        let c = compare_obfuscation(&live("0"), &obfuscation_from_conf(&with));
+        assert_eq!(c.client_only, ["random_trailers"]);
     }
 
     #[test]
