@@ -26,10 +26,13 @@ pub const SERVER_KEY_PLACEHOLDER: &str = "__SERVER_PRIVATE_KEY__";
 pub const MESSAGE_INITIATION_SIZE: u32 = 148;
 pub const MESSAGE_RESPONSE_SIZE: u32 = 92;
 pub const MESSAGE_COOKIE_SIZE: u32 = 64;
+/// `MessageTransportSize`: the smallest transport message, header plus tag.
+pub const MESSAGE_TRANSPORT_SIZE: u32 = 32;
 
-/// S4 pads transport packets, and the protocol caps it at 32 bytes — every
-/// client in `crate::versions::CLIENTS` refuses more, and so does the upstream
-/// generator. S1–S3 have no such ceiling.
+/// The S4 the generator stays under. Not a daemon limit: amneziawg-go and the
+/// kernel module both read S4 as a plain uint16. It is the ceiling the client
+/// matrix records for every client, and S4 pads every data packet, so a larger
+/// one costs throughput on the whole tunnel.
 pub const MAX_S4: u32 = 32;
 
 // ------------------------------------------------------------ 2.0 obfuscation
@@ -81,15 +84,9 @@ impl BaseObfuscation {
                 )));
             }
         }
-        if self.s[3] > MAX_S4 {
-            return Err(Error::Invariant(format!(
-                "S4 ({}) exceeds the protocol maximum of {MAX_S4}",
-                self.s[3]
-            )));
-        }
         if self.s[0] + MESSAGE_INITIATION_SIZE == self.s[1] + MESSAGE_RESPONSE_SIZE {
             return Err(Error::Invariant(format!(
-                "S1 ({}) + {MESSAGE_INITIATION_SIZE} must not equal S2 ({}) + {MESSAGE_RESPONSE_SIZE}; the daemon rejects it",
+                "S1 ({}) + {MESSAGE_INITIATION_SIZE} must not equal S2 ({}) + {MESSAGE_RESPONSE_SIZE}: the 1.0 and 1.5 daemons refuse it",
                 self.s[0], self.s[1]
             )));
         }

@@ -28,6 +28,7 @@ use crate::awg3::{
 use crate::chain_budget::{self, KMOD_CHAIN_BUDGET};
 use crate::deploy::config::{
     BaseObfuscation, MAX_S4, MESSAGE_COOKIE_SIZE, MESSAGE_INITIATION_SIZE, MESSAGE_RESPONSE_SIZE,
+    MESSAGE_TRANSPORT_SIZE,
 };
 use crate::engines::{self, Engine};
 use crate::mimic::{self, Chain, MimicOptions, MimicProfile, TagKind};
@@ -1464,39 +1465,49 @@ pub fn validate_for(
             ));
         }
     }
-    if s[0] + INIT_RESPONSE_DELTA == s[1] {
-        out.push(Violation::err(
-            "S2",
-            "s.init_response_collision",
-            format!(
-                "S1 ({}) + {INIT_RESPONSE_DELTA} = S2 ({}) — a padded initiation would be exactly \
-                 the size of a response, and the daemon refuses the pair",
-                s[0], s[1]
-            ),
-        ));
+    // Two message types padded to the same length. What that costs depends on
+    // the generation, read from each daemon's own config handling:
+    //
+    // * 1.0 (`device.go`, v0.2.12) refuses initiation and response of equal
+    //   size: it demultiplexes on size alone.
+    // * 1.5 (v0.2.14-beta-awg-1.5-1) refuses any two of the four sizes being
+    //   equal, for the same reason.
+    // * From 2.0 `DeterminePacketTypeAndPadding` checks the size and then the
+    //   magic header, so equal sizes still parse. They are one signal on the
+    //   wire where there should be two, and the Amnezia app's own server
+    //   settings refuse them (`isPacketSizeEqual`), so they are reported.
+    let sizes = [
+        ("S1", s[0] + MESSAGE_INITIATION_SIZE),
+        ("S2", s[1] + MESSAGE_RESPONSE_SIZE),
+        ("S3", s[2] + MESSAGE_COOKIE_SIZE),
+        ("S4", s[3] + MESSAGE_TRANSPORT_SIZE),
+    ];
+    let compared = if v == AwgVersion::V1_0 { 2 } else { 4 };
+    for i in 0..compared {
+        for j in (i + 1)..compared {
+            let ((a, la), (b, lb)) = (sizes[i], sizes[j]);
+            if la != lb {
+                continue;
+            }
+            let refused = v == AwgVersion::V1_0 || v == AwgVersion::V1_5;
+            let message = format!(
+                "{a} and {b} pad two message types to the same {la} bytes{}",
+                if refused {
+                    format!(", and the AWG {v} daemon refuses the config")
+                } else {
+                    ": one signal on the wire where there should be two, and the Amnezia \
+                     app's server settings refuse it"
+                        .to_string()
+                }
+            );
+            out.push(if refused {
+                Violation::err(b, "s.size_collision", message)
+            } else {
+                Violation::warn(b, "s.size_collision", message)
+            });
+        }
     }
     if v.supports_s3_s4() {
-        if s[2] == s[0] + INIT_COOKIE_DELTA {
-            out.push(Violation::warn(
-                "S3",
-                "s.cookie_init_collision",
-                format!("S3 = S1 + {INIT_COOKIE_DELTA} — a cookie reply and an initiation would be the same size"),
-            ));
-        }
-        if s[2] == s[1] + RESPONSE_COOKIE_DELTA {
-            out.push(Violation::warn(
-                "S3",
-                "s.cookie_response_collision",
-                format!("S3 = S2 + {RESPONSE_COOKIE_DELTA} — a cookie reply and a response would be the same size"),
-            ));
-        }
-        if s[3] > MAX_S4 {
-            out.push(Violation::err(
-                "S4",
-                "s.over_protocol_max",
-                format!("S4 = {} exceeds the protocol maximum of {MAX_S4}", s[3]),
-            ));
-        }
         if s[3] > client.max_s4 {
             out.push(Violation::err(
                 "S4",
@@ -1506,12 +1517,23 @@ pub fn validate_for(
                     s[3], client.max_s4, client.name
                 ),
             ));
+        } else if s[3] > MAX_S4 {
+            // Not a daemon limit (both engines read S4 as a plain uint16), but
+            // every transport packet carries it, so it costs throughput.
+            out.push(Violation::warn(
+                "S4",
+                "s.s4_large",
+                format!(
+                    "S4 = {} pads every data packet; past {MAX_S4} it costs throughput",
+                    s[3]
+                ),
+            ));
         }
         if s[3] == 0 {
             out.push(Violation::warn(
                 "S4",
                 "s.zero",
-                "S4 = 0 — transport packets are left unobfuscated".to_string(),
+                "S4 = 0: transport packets are left unobfuscated".to_string(),
             ));
         }
     }
@@ -2365,12 +2387,13 @@ mod tests {
         let found = validate_for_client(&p, default_client());
 
         let s4: Vec<_> = found.iter().filter(|v| v.field == "S4").collect();
+        // No daemon caps S4; the client matrix does.
+        assert!(found.iter().all(|v| v.code != "s.over_protocol_max"));
         assert!(
             s4.iter()
-                .any(|v| v.code == "s.over_protocol_max" && v.level == Level::Error),
-            "S4 = 40 must be refused: {found:?}"
+                .any(|v| v.code == "client.s4_cap" && v.level == Level::Error),
+            "S4 = 40 is over every client's cap: {found:?}"
         );
-        assert!(s4.iter().any(|v| v.code == "client.s4_cap"));
         assert!(s4[0].message.contains("40"));
 
         let jc = found
@@ -2398,14 +2421,38 @@ mod tests {
     }
 
     #[test]
-    fn the_s1_s2_size_collision_is_refused() {
-        let mut p = make(AwgVersion::V3_0, 13);
-        p.base.s[1] = p.base.s[0] + INIT_RESPONSE_DELTA;
-        let found = validate_for_client(&p, default_client());
-        assert!(
-            found
-                .iter()
-                .any(|v| v.code == "s.init_response_collision" && v.level == Level::Error)
+    fn equal_message_sizes_are_refused_where_the_daemon_refuses_them() {
+        let collision = |v: AwgVersion, f: &dyn Fn(&mut [u32; 4])| {
+            let mut p = make(v, 13);
+            f(&mut p.base.s);
+            validate_for_client(&p, client("awg-kmod").unwrap())
+                .into_iter()
+                .find(|x| x.code == "s.size_collision")
+                .map(|x| (x.field, x.level))
+        };
+        let init_response = |s: &mut [u32; 4]| s[1] = s[0] + INIT_RESPONSE_DELTA;
+        // 1.0 and 1.5 demultiplex on size and refuse the config.
+        assert_eq!(
+            collision(AwgVersion::V1_0, &init_response).map(|c| c.1),
+            Some(Level::Error)
+        );
+        assert_eq!(
+            collision(AwgVersion::V1_5, &init_response).map(|c| c.1),
+            Some(Level::Error)
+        );
+        // From 2.0 the header tells them apart; it is a tell, not a failure.
+        assert_eq!(
+            collision(AwgVersion::V3_0, &init_response).map(|c| c.1),
+            Some(Level::Warn)
+        );
+        // S4 + 32 against S3 + 64: the pair Architect did not check.
+        let transport_cookie = |s: &mut [u32; 4]| {
+            s[2] = 4;
+            s[3] = 36;
+        };
+        assert_eq!(
+            collision(AwgVersion::V2_0, &transport_cookie),
+            Some(("S4".to_string(), Level::Warn))
         );
     }
 
