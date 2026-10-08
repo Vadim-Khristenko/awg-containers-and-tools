@@ -42,6 +42,19 @@ pub const ROUTER_S_MAX: u32 = 20;
 pub const S3_MAX: u32 = 64;
 pub const S3_MAX_EXTREME: u32 = 256;
 
+/// Junk train bounds (Architect `rules.ts`): the kernel module accepts up to 128,
+/// and above 64 the handshake waits noticeably on the train.
+pub const JC_MAX: u32 = 128;
+pub const JC_SLOW: u32 = 64;
+
+/// The largest S that keeps each padded handshake message inside 1280 bytes,
+/// the one size every IPv6 path must carry: 1280 minus the initiation (148),
+/// the response (92) and the cookie reply (64). Past it the message can
+/// fragment, which is slower and stands out; the daemon itself takes more.
+pub const S1_CEILING: u32 = 1280 - MESSAGE_INITIATION_SIZE;
+pub const S2_CEILING: u32 = 1280 - MESSAGE_RESPONSE_SIZE;
+pub const S3_CEILING: u32 = 1280 - MESSAGE_COOKIE_SIZE;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AwgVersion {
     V1_0,
@@ -1412,6 +1425,21 @@ pub fn validate_for(
 
     // ---- padding sizes
     let s = params.base.s;
+    // Past these a padded handshake message is larger than every path is
+    // required to carry.
+    for (i, max) in [(0usize, S1_CEILING), (1, S2_CEILING), (2, S3_CEILING)] {
+        if (i < 2 || v.supports_s3_s4()) && s[i] > max {
+            out.push(Violation::warn(
+                format!("S{}", i + 1),
+                "s.over_min_mtu",
+                format!(
+                    "S{} = {} is past {max}: the padded message is larger than the 1280 bytes every path must carry, and can fragment",
+                    i + 1,
+                    s[i]
+                ),
+            ));
+        }
+    }
     if s[0] + INIT_RESPONSE_DELTA == s[1] {
         out.push(Violation::err(
             "S2",
@@ -1465,12 +1493,31 @@ pub fn validate_for(
     }
 
     // ---- junk train
-    if params.base.jmin > params.base.jmax {
+    // Zero is an ordinary choice (no train at all); past 128 the kernel module
+    // refuses, and past 64 the handshake waits noticeably on the train.
+    let jc = params.base.jc;
+    if jc > JC_MAX {
+        out.push(Violation::err(
+            "Jc",
+            "j.jc_range",
+            format!("Jc = {jc} is outside 0..{JC_MAX}"),
+        ));
+    } else if jc > JC_SLOW {
+        out.push(Violation::warn(
+            "Jc",
+            "j.jc_slow",
+            format!(
+                "Jc = {jc}: every junk packet goes out before the initiation, so past \
+                 {JC_SLOW} the handshake takes noticeably longer"
+            ),
+        ));
+    }
+    if params.base.jmin >= params.base.jmax {
         out.push(Violation::err(
             "Jmax",
             "j.inverted",
             format!(
-                "Jmin ({}) exceeds Jmax ({})",
+                "Jmin ({}) is not below Jmax ({})",
                 params.base.jmin, params.base.jmax
             ),
         ));
@@ -2251,6 +2298,39 @@ mod tests {
             .expect("no syntax error");
         assert_eq!(found.field, "I1");
         assert!(found.message.contains("odd number of hex digits"));
+    }
+
+    #[test]
+    fn the_junk_train_and_padding_bounds_hold() {
+        let level = |p: &VersionedParams, code: &str| {
+            validate_for_client(p, client("awg-kmod").unwrap())
+                .into_iter()
+                .find(|v| v.code == code)
+                .map(|v| v.level)
+        };
+        let mut p = make(AwgVersion::V2_0, 1);
+        p.base.jc = 129;
+        assert_eq!(level(&p, "j.jc_range"), Some(Level::Error));
+        p.base.jc = 65;
+        assert_eq!(level(&p, "j.jc_slow"), Some(Level::Warn));
+        assert_eq!(level(&p, "j.jc_range"), None);
+        p.base.jc = 0;
+        assert_eq!(
+            level(&p, "j.jc_range"),
+            None,
+            "no train is a choice, not an error"
+        );
+
+        let mut p = make(AwgVersion::V2_0, 1);
+        p.base.jmax = p.base.jmin;
+        assert_eq!(level(&p, "j.inverted"), Some(Level::Error));
+
+        let mut p = make(AwgVersion::V2_0, 1);
+        p.base.s[2] = S3_CEILING;
+        assert_eq!(level(&p, "s.over_min_mtu"), None, "the ceiling itself fits");
+        p.base.s[2] = S3_CEILING + 1;
+        assert_eq!(level(&p, "s.over_min_mtu"), Some(Level::Warn));
+        assert_eq!(S1_CEILING + MESSAGE_INITIATION_SIZE, 1280);
     }
 
     #[test]
