@@ -940,7 +940,7 @@ fn draw_generate(f: &mut ratatui::Frame, app: &App, area: Rect) {
                 Line::from(vec![
                     Span::styled(format!(" {mark} "), style),
                     Span::styled(format!("{}: ", v.field), theme::dim()),
-                    Span::styled(v.message.clone(), theme::base()),
+                    Span::styled(v.text(app.lang == Lang::Ru).to_string(), theme::base()),
                 ])
             })
             .collect();
@@ -1005,7 +1005,7 @@ fn draw_check(f: &mut ratatui::Frame, app: &App, area: Rect) {
                 lines.push(Line::from(vec![
                     Span::styled(format!("{mark} "), style),
                     Span::styled(format!("{}: ", v.field), style),
-                    Span::styled(v.message.clone(), theme::base()),
+                    Span::styled(v.text(app.lang == Lang::Ru).to_string(), theme::base()),
                 ]));
             }
         }

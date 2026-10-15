@@ -576,6 +576,9 @@ pub struct Violation {
     /// the message.
     pub code: &'static str,
     pub message: String,
+    /// The same finding in Russian, written beside the English at the place it
+    /// is raised so the two cannot drift apart. `None` falls back to English.
+    pub message_ru: Option<String>,
 }
 
 impl std::fmt::Display for Violation {
@@ -600,6 +603,7 @@ impl Violation {
             level: Level::Error,
             code,
             message: message.into(),
+            message_ru: None,
         }
     }
 
@@ -613,6 +617,7 @@ impl Violation {
             level: Level::Warn,
             code,
             message: message.into(),
+            message_ru: None,
         }
     }
 
@@ -626,6 +631,21 @@ impl Violation {
             level: Level::Info,
             code,
             message: message.into(),
+            message_ru: None,
+        }
+    }
+
+    /// Attach the Russian text.
+    pub(crate) fn ru(mut self, text: impl Into<String>) -> Self {
+        self.message_ru = Some(text.into());
+        self
+    }
+
+    /// The message in Russian when asked for and written, English otherwise.
+    pub fn text(&self, russian: bool) -> &str {
+        match (&self.message_ru, russian) {
+            (Some(ru), true) => ru,
+            _ => &self.message,
         }
     }
 }
@@ -1386,66 +1406,90 @@ pub fn validate_for(
     for i in 0..4 {
         for j in (i + 1)..4 {
             if ranges[i].lo <= ranges[j].hi && ranges[j].lo <= ranges[i].hi {
-                out.push(Violation::err(
-                    format!("H{}/H{}", i + 1, j + 1),
-                    "h.overlap",
-                    format!(
-                        "H{} ({}) and H{} ({}) overlap; the daemon demultiplexes on this number \
-                         alone, so a packet in the overlap belongs to two message types",
-                        i + 1,
-                        ranges[i],
-                        j + 1,
-                        ranges[j]
-                    ),
-                ));
+                let (a, b) = (i + 1, j + 1);
+                let (ra, rb) = (ranges[i], ranges[j]);
+                out.push(
+                    Violation::err(
+                        format!("H{a}/H{b}"),
+                        "h.overlap",
+                        format!(
+                            "H{a} ({ra}) and H{b} ({rb}) overlap; the daemon demultiplexes on \
+                             this number alone, so a packet in the overlap belongs to two \
+                             message types"
+                        ),
+                    )
+                    .ru(format!(
+                        "H{a} ({ra}) и H{b} ({rb}) пересекаются; демон различает типы сообщений \
+                         только по этому числу, и пакет из пересечения принадлежит двум типам"
+                    )),
+                );
             }
         }
-        if !headers_protected && (1..=4).contains(&ranges[i].lo) {
-            out.push(Violation::warn(
-                format!("H{}", i + 1),
-                "h.reserved",
-                format!(
-                    "H{} starts at {} — 1..4 are the WireGuard message types this field replaces",
-                    i + 1,
-                    ranges[i].lo
-                ),
-            ));
+        let n = i + 1;
+        let r = ranges[i];
+        if !headers_protected && (1..=4).contains(&r.lo) {
+            out.push(
+                Violation::warn(
+                    format!("H{n}"),
+                    "h.reserved",
+                    format!(
+                        "H{n} starts at {}: 1..4 are the WireGuard message types this field \
+                         replaces, and without header protection they go out in the clear",
+                        r.lo
+                    ),
+                )
+                .ru(format!(
+                    "H{n} начинается с {}: 1..4 это типы сообщений WireGuard, которые поле \
+                     заменяет, и без защиты заголовков они уходят открытым текстом",
+                    r.lo
+                )),
+            );
         }
-        if ranges[i].hi > client.max_h_value {
-            out.push(Violation::err(
-                format!("H{}", i + 1),
-                "client.h_cap",
-                format!(
-                    "H{} reaches {} but {} accepts at most {}{}",
-                    i + 1,
-                    ranges[i].hi,
-                    client.name,
-                    client.max_h_value,
-                    if client.max_h_value == INT32_MAX {
-                        " (INT32_MAX, issue #85)"
-                    } else {
-                        ""
-                    }
-                ),
-            ));
+        if r.hi > client.max_h_value {
+            let note = if client.max_h_value == INT32_MAX {
+                " (INT32_MAX, issue #85)"
+            } else {
+                ""
+            };
+            out.push(
+                Violation::err(
+                    format!("H{n}"),
+                    "client.h_cap",
+                    format!(
+                        "H{n} reaches {} but {} accepts at most {}{note}",
+                        r.hi, client.name, client.max_h_value
+                    ),
+                )
+                .ru(format!(
+                    "H{n} доходит до {}, а {} принимает не больше {}{note}",
+                    r.hi, client.name, client.max_h_value
+                )),
+            );
         }
     }
 
     if let Some(loss) = trailer_loss(params)
         && loss > TRAILER_LOSS_MAX
     {
-        out.push(Violation::warn(
-            "H1-H3",
-            "h.width_loss",
-            format!(
-                "with RandomTrailers on, the receiver tests every transport packet against \
-                 H1-H3 and drops the ones that land inside: at these widths that is {} of \
-                 traffic, one packet in {}, and nothing logs it. Narrow H1-H3 to a few tens \
-                 of thousands (--narrow-h); H4 is checked last and can stay wide",
-                format_share(loss),
-                (1.0 / loss).round() as u64
-            ),
-        ));
+        let (share, one_in) = (format_share(loss), (1.0 / loss).round() as u64);
+        out.push(
+            Violation::warn(
+                "H1-H3",
+                "h.width_loss",
+                format!(
+                    "with RandomTrailers on, the receiver tests every transport packet against \
+                     H1-H3 and drops the ones that land inside: at these widths that is {share} \
+                     of traffic, one packet in {one_in}, and nothing logs it. Narrow H1-H3 to a \
+                     few tens of thousands (--narrow-h); H4 is checked last and can stay wide"
+                ),
+            )
+            .ru(format!(
+                "с RandomTrailers получатель сверяет каждый транспортный пакет с H1-H3 и \
+                 отбрасывает попавшие внутрь: при такой ширине это {share} трафика, один пакет \
+                 из {one_in}, и нигде это не пишется. Сузь H1-H3 до десятков тысяч \
+                 (--narrow-h); H4 проверяется последним и может оставаться широким"
+            )),
+        );
     }
 
     // ---- padding sizes
@@ -1454,15 +1498,21 @@ pub fn validate_for(
     // required to carry.
     for (i, max) in [(0usize, S1_CEILING), (1, S2_CEILING), (2, S3_CEILING)] {
         if (i < 2 || v.supports_s3_s4()) && s[i] > max {
-            out.push(Violation::warn(
-                format!("S{}", i + 1),
-                "s.over_min_mtu",
-                format!(
-                    "S{} = {} is past {max}: the padded message is larger than the 1280 bytes every path must carry, and can fragment",
-                    i + 1,
-                    s[i]
-                ),
-            ));
+            let (n, val) = (i + 1, s[i]);
+            out.push(
+                Violation::warn(
+                    format!("S{n}"),
+                    "s.over_min_mtu",
+                    format!(
+                        "S{n} = {val} is past {max}: the padded message is larger than the 1280 \
+                         bytes every path must carry, and can fragment"
+                    ),
+                )
+                .ru(format!(
+                    "S{n} = {val} больше {max}: дополненное сообщение не влезает в 1280 байт, \
+                     которые обязан пропускать любой путь, и может фрагментироваться"
+                )),
+            );
         }
     }
     // Two message types padded to the same length. What that costs depends on
@@ -1490,138 +1540,194 @@ pub fn validate_for(
                 continue;
             }
             let refused = v == AwgVersion::V1_0 || v == AwgVersion::V1_5;
-            let message = format!(
-                "{a} and {b} pad two message types to the same {la} bytes{}",
-                if refused {
-                    format!(", and the AWG {v} daemon refuses the config")
-                } else {
-                    ": one signal on the wire where there should be two, and the Amnezia \
-                     app's server settings refuse it"
-                        .to_string()
-                }
-            );
-            out.push(if refused {
-                Violation::err(b, "s.size_collision", message)
+            let violation = if refused {
+                Violation::err(
+                    b,
+                    "s.size_collision",
+                    format!(
+                        "{a} and {b} pad two message types to the same {la} bytes, and the AWG \
+                         {v} daemon refuses the config"
+                    ),
+                )
+                .ru(format!(
+                    "{a} и {b} доводят два типа сообщений до одинаковых {la} байт, и демон AWG \
+                     {v} отвергает такой конфиг"
+                ))
             } else {
-                Violation::warn(b, "s.size_collision", message)
-            });
+                Violation::warn(
+                    b,
+                    "s.size_collision",
+                    format!(
+                        "{a} and {b} pad two message types to the same {la} bytes: one signal on \
+                         the wire where there should be two, and the Amnezia app's server \
+                         settings refuse it"
+                    ),
+                )
+                .ru(format!(
+                    "{a} и {b} доводят два типа сообщений до одинаковых {la} байт: на проводе \
+                     один признак вместо двух, и настройки сервера в приложении Amnezia такое \
+                     не принимают"
+                ))
+            };
+            out.push(violation);
         }
     }
     if v.supports_s3_s4() {
-        if s[3] > client.max_s4 {
-            out.push(Violation::err(
-                "S4",
-                "client.s4_cap",
-                format!(
-                    "S4 = {} exceeds the maximum of {} for {}",
-                    s[3], client.max_s4, client.name
-                ),
-            ));
-        } else if s[3] > MAX_S4 {
+        let s4 = s[3];
+        if s4 > client.max_s4 {
+            out.push(
+                Violation::err(
+                    "S4",
+                    "client.s4_cap",
+                    format!(
+                        "S4 = {s4} exceeds the maximum of {} for {}",
+                        client.max_s4, client.name
+                    ),
+                )
+                .ru(format!(
+                    "S4 = {s4} больше максимума {} для {}",
+                    client.max_s4, client.name
+                )),
+            );
+        } else if s4 > MAX_S4 {
             // Not a daemon limit (both engines read S4 as a plain uint16), but
             // every transport packet carries it, so it costs throughput.
-            out.push(Violation::warn(
-                "S4",
-                "s.s4_large",
-                format!(
-                    "S4 = {} pads every data packet; past {MAX_S4} it costs throughput",
-                    s[3]
-                ),
-            ));
+            out.push(
+                Violation::warn(
+                    "S4",
+                    "s.s4_large",
+                    format!("S4 = {s4} pads every data packet; past {MAX_S4} it costs throughput"),
+                )
+                .ru(format!(
+                    "S4 = {s4} добавляется к каждому пакету данных; больше {MAX_S4} это заметно \
+                     по скорости"
+                )),
+            );
         }
-        if s[3] == 0 {
-            out.push(Violation::warn(
-                "S4",
-                "s.zero",
-                "S4 = 0: transport packets are left unobfuscated".to_string(),
-            ));
+        if s4 == 0 {
+            out.push(
+                Violation::warn(
+                    "S4",
+                    "s.zero",
+                    "S4 = 0: transport packets are left unobfuscated",
+                )
+                .ru("S4 = 0: транспортные пакеты остаются без обфускации"),
+            );
         }
     }
 
     // ---- junk train
     // Zero is an ordinary choice (no train at all); past 128 the kernel module
     // refuses, and past 64 the handshake waits noticeably on the train.
-    let jc = params.base.jc;
+    let b = &params.base;
+    let jc = b.jc;
     if jc > JC_MAX {
-        out.push(Violation::err(
-            "Jc",
-            "j.jc_range",
-            format!("Jc = {jc} is outside 0..{JC_MAX}"),
-        ));
+        out.push(
+            Violation::err(
+                "Jc",
+                "j.jc_range",
+                format!("Jc = {jc} is outside 0..{JC_MAX}"),
+            )
+            .ru(format!("Jc = {jc} вне диапазона 0..{JC_MAX}")),
+        );
     } else if jc > JC_SLOW {
-        out.push(Violation::warn(
-            "Jc",
-            "j.jc_slow",
-            format!(
-                "Jc = {jc}: every junk packet goes out before the initiation, so past \
-                 {JC_SLOW} the handshake takes noticeably longer"
-            ),
-        ));
+        out.push(
+            Violation::warn(
+                "Jc",
+                "j.jc_slow",
+                format!(
+                    "Jc = {jc}: every junk packet goes out before the initiation, so past \
+                     {JC_SLOW} the handshake takes noticeably longer"
+                ),
+            )
+            .ru(format!(
+                "Jc = {jc}: каждый мусорный пакет уходит до инициации, и после {JC_SLOW} \
+                 хендшейк заметно затягивается"
+            )),
+        );
     }
-    if params.base.jmin >= params.base.jmax {
-        out.push(Violation::err(
-            "Jmax",
-            "j.inverted",
-            format!(
-                "Jmin ({}) is not below Jmax ({})",
-                params.base.jmin, params.base.jmax
-            ),
-        ));
+    if b.jmin >= b.jmax {
+        out.push(
+            Violation::err(
+                "Jmax",
+                "j.inverted",
+                format!("Jmin ({}) is not below Jmax ({})", b.jmin, b.jmax),
+            )
+            .ru(format!("Jmin ({}) не меньше Jmax ({})", b.jmin, b.jmax)),
+        );
     }
-    if params.base.jc > client.max_jc {
-        out.push(Violation::warn(
-            "Jc",
-            "client.jc_cap",
-            format!(
-                "Jc = {} exceeds the recommended maximum of {} for {}",
-                params.base.jc, client.max_jc, client.name
-            ),
-        ));
+    if jc > client.max_jc {
+        out.push(
+            Violation::warn(
+                "Jc",
+                "client.jc_cap",
+                format!(
+                    "Jc = {jc} exceeds the recommended maximum of {} for {}",
+                    client.max_jc, client.name
+                ),
+            )
+            .ru(format!(
+                "Jc = {jc} больше рекомендованного максимума {} для {}",
+                client.max_jc, client.name
+            )),
+        );
     }
-    if v == AwgVersion::V1_0 && params.base.jmax <= 81 {
-        out.push(Violation::warn(
-            "Jmax",
-            "j.v10_floor",
-            format!(
-                "Jmax = {} — AWG 1.0 clients want more than 81 here",
-                params.base.jmax
-            ),
-        ));
+    if v == AwgVersion::V1_0 && b.jmax <= 81 {
+        out.push(
+            Violation::warn(
+                "Jmax",
+                "j.v10_floor",
+                format!("Jmax = {}: AWG 1.0 clients want more than 81 here", b.jmax),
+            )
+            .ru(format!(
+                "Jmax = {}: клиентам AWG 1.0 нужно больше 81",
+                b.jmax
+            )),
+        );
     }
 
     // ---- CPS chains
     match &params.chains {
         Some(chains) => {
             if !v.supports_cps() {
-                out.push(Violation::err(
-                    "I1-I5",
-                    "version.cps_unsupported",
-                    format!("I1-I5 are set but AWG {v} has no CPS chains"),
-                ));
+                out.push(
+                    Violation::err(
+                        "I1-I5",
+                        "version.cps_unsupported",
+                        format!("I1-I5 are set but AWG {v} has no CPS chains"),
+                    )
+                    .ru(format!("I1-I5 заданы, но в AWG {v} цепочек нет")),
+                );
             }
             if !client.supports_i1_i5 {
-                out.push(Violation::err(
-                    "I1-I5",
-                    "client.i1_i5",
-                    format!("{} does not implement I1-I5", client.name),
-                ));
+                out.push(
+                    Violation::err(
+                        "I1-I5",
+                        "client.i1_i5",
+                        format!("{} does not implement I1-I5", client.name),
+                    )
+                    .ru(format!("{} не поддерживает I1-I5", client.name)),
+                );
             }
             for (i, raw) in chains.iter().enumerate() {
                 let field = format!("I{}", i + 1);
                 let chain = match Chain::parse(raw) {
                     Ok(c) => c,
                     Err(e) => {
-                        out.push(Violation::err(field.clone(), "chain.syntax", e.to_string()));
+                        out.push(
+                            Violation::err(field.clone(), "chain.syntax", e.to_string())
+                                .ru(format!("{field} не разбирается: {e}")),
+                        );
                         continue;
                     }
                 };
                 // One complaint per tag kind per chain: a chain with forty
                 // `<rc>` tags has one problem, not forty.
                 let mut reported: Vec<&'static str> = Vec::new();
-                let mut complain = |out: &mut Vec<Violation>, code, message: String| {
+                let mut complain = |out: &mut Vec<Violation>, code, en: String, ru: String| {
                     if !reported.contains(&code) {
                         reported.push(code);
-                        out.push(Violation::err(field.clone(), code, message));
+                        out.push(Violation::err(field.clone(), code, en).ru(ru));
                     }
                 };
 
@@ -1636,14 +1742,18 @@ pub fn validate_for(
                 let mut seen: Vec<TagKind> = Vec::new();
                 for tag in chain.tags() {
                     let kind = tag.kind();
+                    let t = kind.as_str();
                     if !known.contains(&kind) {
                         complain(
                             &mut out,
                             "version.tag_vocabulary",
                             format!(
-                                "{field} uses {}, which no AWG {v} parser has a builder for: \
-                                 the daemon answers `invalid tag`, not a shorter packet",
-                                kind.as_str()
+                                "{field} uses {t}, which no AWG {v} parser has a builder for: \
+                                 the daemon answers `invalid tag`, not a shorter packet"
+                            ),
+                            format!(
+                                "{field} использует {t}, которого не знает ни один парсер AWG \
+                                 {v}: демон ответит `invalid tag`, а не укоротит пакет"
                             ),
                         );
                         continue;
@@ -1653,34 +1763,39 @@ pub fn validate_for(
                             &mut out,
                             "version.tag_not_unique",
                             format!(
-                                "{field} uses {} more than once; the AWG {v} parser allows one \
-                                 per chain",
-                                kind.as_str()
+                                "{field} uses {t} more than once; the AWG {v} parser allows \
+                                 one per chain"
+                            ),
+                            format!(
+                                "{field} использует {t} больше одного раза; парсер AWG {v} \
+                                 допускает один на цепочку"
                             ),
                         );
                     }
                     seen.push(kind);
 
                     if !client_tags.contains(&kind) {
+                        let (name, engine) = (client.name, client.engine.label());
                         complain(
                             &mut out,
                             "client.tag_unsupported",
+                            format!("{field} uses {t}, which {name} on {engine} does not parse"),
                             format!(
-                                "{field} uses {}, which {} on {} does not parse",
-                                kind.as_str(),
-                                client.name,
-                                client.engine.label()
+                                "{field} использует {t}, а {name} на {engine} его не разбирает"
                             ),
                         );
                     } else if !v.cps_is_client_only() && !server_tags.contains(&kind) {
+                        let engine = server_engine.label();
                         complain(
                             &mut out,
                             "server.tag_unsupported",
                             format!(
-                                "{field} uses {}, which the server's {} does not parse; from \
-                                 2.0 the server reads I1-I5 too",
-                                kind.as_str(),
-                                server_engine.label()
+                                "{field} uses {t}, which the server's {engine} does not parse; \
+                                 from 2.0 the server reads I1-I5 too"
+                            ),
+                            format!(
+                                "{field} использует {t}, а {engine} на сервере его не разбирает; \
+                                 с 2.0 сервер тоже читает I1-I5"
                             ),
                         );
                     }
@@ -1694,24 +1809,33 @@ pub fn validate_for(
                 let on_kmod = [client.engine, server_engine]
                     .iter()
                     .any(|e| matches!(e, Engine::Kmod | Engine::AwgQuick));
-                let message = format!(
+                let en = format!(
                     "I1-I5 take {total} netlink bytes; the kernel module carries at most \
                      {KMOD_CHAIN_BUDGET} and `awg show` answers \"Message too long\" past it"
                 );
+                let ru = format!(
+                    "I1-I5 занимают {total} байт netlink; модуль ядра несёт не больше \
+                     {KMOD_CHAIN_BUDGET}, дальше `awg show` отвечает \"Message too long\""
+                );
                 out.push(if on_kmod {
-                    Violation::err("I1-I5", "chain.kmod_budget", message)
+                    Violation::err("I1-I5", "chain.kmod_budget", en).ru(ru)
                 } else {
-                    Violation::warn("I1-I5", "chain.kmod_budget", message)
+                    Violation::warn("I1-I5", "chain.kmod_budget", en).ru(ru)
                 });
             }
         }
         None => {
             if v.supports_cps() && client.supports_i1_i5 {
-                out.push(Violation::warn(
-                    "I1-I5",
-                    "version.cps_missing",
-                    format!("AWG {v} supports I1-I5 but none were generated"),
-                ));
+                out.push(
+                    Violation::warn(
+                        "I1-I5",
+                        "version.cps_missing",
+                        format!("AWG {v} supports I1-I5 but none were generated"),
+                    )
+                    .ru(format!(
+                        "AWG {v} поддерживает I1-I5, но они не сгенерированы"
+                    )),
+                );
             }
         }
     }
@@ -1719,30 +1843,50 @@ pub fn validate_for(
     // ---- 3.0 block
     if let Some(p) = &params.awg3 {
         if !v.supports_awg3() && !p.is_empty() {
-            out.push(Violation::err(
-                "AWG3",
-                "version.awg3_mismatch",
-                format!("3.0 parameters are set but the config version is {v}"),
-            ));
+            out.push(
+                Violation::err(
+                    "AWG3",
+                    "version.awg3_mismatch",
+                    format!("3.0 parameters are set but the config version is {v}"),
+                )
+                .ru(format!("заданы параметры 3.0, но версия конфига {v}")),
+            );
         }
         if !v.supports_feature_flags() && (p.random_trailers || p.disable_cookies) {
-            out.push(Violation::warn(
-                "RandomTrailers",
-                "awg3.flags_version_mismatch",
-                format!(
-                    "3.1 switches are set but the config version is {v} — a 3.0 device refuses these keys"
-                ),
-            ));
+            out.push(
+                Violation::warn(
+                    "RandomTrailers",
+                    "awg3.flags_version_mismatch",
+                    format!(
+                        "3.1 switches are set but the config version is {v}: a 3.0 device \
+                         refuses these keys"
+                    ),
+                )
+                .ru(format!(
+                    "заданы переключатели 3.1, но версия конфига {v}: устройство 3.0 эти \
+                     ключи не принимает"
+                )),
+            );
         }
         if p.disable_cookies {
-            out.push(Violation::warn(
-                "DisableCookies",
-                "awg3.cookies_off",
-                "DisableCookies also switches the junk train off and breaks NAT keepalive under load".to_string(),
-            ));
+            out.push(
+                Violation::warn(
+                    "DisableCookies",
+                    "awg3.cookies_off",
+                    "DisableCookies also switches the junk train off and breaks NAT keepalive \
+                     under load",
+                )
+                .ru(
+                    "DisableCookies заодно выключает мусорные пакеты и ломает keepalive за NAT \
+                     под нагрузкой",
+                ),
+            );
         }
         if let Err(e) = p.validate() {
-            out.push(Violation::err("AWG3", "awg3.timers", e.to_string()));
+            out.push(
+                Violation::err("AWG3", "awg3.timers", e.to_string())
+                    .ru(format!("таймеры 3.x несовместимы: {e}")),
+            );
         }
         if p.header_protection_key.is_some() {
             // send.go slices the ChaCha20 nonce out of the S-padding; padding
@@ -1750,33 +1894,45 @@ pub fn validate_for(
             // of random bytes, with nothing logged either way.
             for (i, value) in s.iter().enumerate() {
                 if *value < MIN_S_WITH_HEADER_PROTECTION {
-                    out.push(Violation::err(
-                        format!("S{}", i + 1),
-                        "awg3.s_below_nonce",
-                        format!(
-                            "S{} = {value} is below {MIN_S_WITH_HEADER_PROTECTION}; with a \
-                             HeaderProtectionKey the cipher nonce comes out of this padding",
-                            i + 1
-                        ),
-                    ));
+                    let n = i + 1;
+                    out.push(
+                        Violation::err(
+                            format!("S{n}"),
+                            "awg3.s_below_nonce",
+                            format!(
+                                "S{n} = {value} is below {MIN_S_WITH_HEADER_PROTECTION}; with a \
+                                 HeaderProtectionKey the cipher nonce comes out of this padding"
+                            ),
+                        )
+                        .ru(format!(
+                            "S{n} = {value} меньше {MIN_S_WITH_HEADER_PROTECTION}; с \
+                             HeaderProtectionKey nonce шифра берётся из этого паддинга"
+                        )),
+                    );
                 }
             }
         }
         if let Some(r) = p.content_padding_addition
             && r.hi < 1
         {
-            out.push(Violation::warn(
-                "ContentPaddingAddition",
-                "awg3.cpa_zero",
-                "ContentPaddingAddition = 0 — the extra transport padding is off".to_string(),
-            ));
+            out.push(
+                Violation::warn(
+                    "ContentPaddingAddition",
+                    "awg3.cpa_zero",
+                    "ContentPaddingAddition = 0: the extra transport padding is off",
+                )
+                .ru("ContentPaddingAddition = 0: дополнительный паддинг транспорта выключен"),
+            );
         }
     } else if v.supports_awg3() {
-        out.push(Violation::warn(
-            "AWG3",
-            "version.awg3_missing",
-            "AWG 3.0 selected but no 3.0 parameters were generated".to_string(),
-        ));
+        out.push(
+            Violation::warn(
+                "AWG3",
+                "version.awg3_missing",
+                "AWG 3.x selected but no 3.x parameters were generated",
+            )
+            .ru("выбрана AWG 3.x, но параметры 3.x не сгенерированы"),
+        );
     }
 
     out

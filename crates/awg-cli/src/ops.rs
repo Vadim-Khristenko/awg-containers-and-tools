@@ -629,7 +629,7 @@ pub fn cmd_peer(args: &[String], lang: Lang) {
             // nothing and catches a node whose own config drifted.
             let report = awg_core::check::check(&conf, &Default::default());
             for f in report.findings.iter().filter(|f| f.level == Level::Error) {
-                eprintln!("!  {}: {}", f.field, f.message);
+                eprintln!("!  {}: {}", f.field, f.text(lang == Lang::Ru));
             }
 
             match flag(args, "--out") {

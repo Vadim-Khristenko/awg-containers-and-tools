@@ -452,7 +452,7 @@ fn cmd_gen(args: &[String], lang: Lang) {
     if !warnings.is_empty() {
         eprintln!("{}:", t(lang, K::WarningsHeader));
         for w in warnings {
-            eprintln!("  {}: {}", w.field, w.message);
+            eprintln!("  {}: {}", w.field, w.text(lang == Lang::Ru));
         }
     }
     for issue in client.known_issues {
@@ -725,6 +725,7 @@ fn cmd_check(args: &[String], lang: Lang) {
                     "field": f.field,
                     "code": f.code,
                     "message": f.message,
+                    "message_ru": f.message_ru,
                 })
             })
             .collect();
@@ -759,7 +760,13 @@ fn cmd_check(args: &[String], lang: Lang) {
             println!("{}", t(lang, K::MsgCheckClean));
         }
         for f in &report.findings {
-            println!("  {:<7} {:<20} {}", level_word(f.level), f.field, f.message);
+            let level = match (lang, f.level) {
+                (Lang::Ru, Level::Error) => "ошибка",
+                (Lang::Ru, Level::Warn) => "внимание",
+                (Lang::Ru, Level::Info) => "заметка",
+                (_, l) => level_word(l),
+            };
+            println!("  {level:<8} {:<20} {}", f.field, f.text(lang == Lang::Ru));
         }
     }
 

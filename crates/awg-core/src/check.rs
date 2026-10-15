@@ -213,11 +213,14 @@ pub fn check(input: &str, opts: &CheckOptions) -> CheckReport {
                     version: None,
                     version_inferred: false,
                     params: None,
-                    findings: vec![Violation::err(
-                        "vpn://",
-                        "conf.bad_link",
-                        format!("the link does not hold a config: {e}"),
-                    )],
+                    findings: vec![
+                        Violation::err(
+                            "vpn://",
+                            "conf.bad_link",
+                            format!("the link does not hold a config: {e}"),
+                        )
+                        .ru(format!("в ссылке нет конфига: {e}")),
+                    ],
                 };
             }
         }
@@ -239,11 +242,14 @@ pub fn check_conf(text: &str, opts: &CheckOptions) -> CheckReport {
     if !AWG_FIELDS.iter().any(|k| present.contains(k)) {
         // A plain WireGuard config is not broken; it is just not the thing
         // this check is for.
-        findings.push(Violation::warn(
-            "AWG",
-            "conf.not_obfuscated",
-            "no AmneziaWG parameters: this is a plain WireGuard config",
-        ));
+        findings.push(
+            Violation::warn(
+                "AWG",
+                "conf.not_obfuscated",
+                "no AmneziaWG parameters: this is a plain WireGuard config",
+            )
+            .ru("параметров AmneziaWG нет: это обычный конфиг WireGuard"),
+        );
         return CheckReport {
             version: None,
             version_inferred: false,
@@ -285,14 +291,20 @@ pub fn check_conf(text: &str, opts: &CheckOptions) -> CheckReport {
         .and_then(|m| m.parse::<u32>().ok())
         .unwrap_or(1280);
     if present.contains("Jmax") && params.base.jmax >= mtu {
-        findings.push(Violation::warn(
-            "Jmax",
-            "j.over_mtu",
-            format!(
-                "Jmax = {} is not below the MTU ({mtu}): the largest junk packets fragment",
+        findings.push(
+            Violation::warn(
+                "Jmax",
+                "j.over_mtu",
+                format!(
+                    "Jmax = {} is not below the MTU ({mtu}): the largest junk packets fragment",
+                    params.base.jmax
+                ),
+            )
+            .ru(format!(
+                "Jmax = {} не меньше MTU ({mtu}): самые большие мусорные пакеты фрагментируются",
                 params.base.jmax
-            ),
-        ));
+            )),
+        );
     }
 
     CheckReport {
@@ -374,11 +386,16 @@ fn params_from_conf(conf: &ConfFile, version: AwgVersion) -> (VersionedParams, V
         match conf.get(key) {
             None => 0,
             Some(v) => v.trim().parse().unwrap_or_else(|_| {
-                found.push(Violation::err(
-                    key,
-                    "conf.not_a_number",
-                    format!("{key} = {v} is not a number the daemon can read"),
-                ));
+                found.push(
+                    Violation::err(
+                        key,
+                        "conf.not_a_number",
+                        format!("{key} = {v} is not a number the daemon can read"),
+                    )
+                    .ru(format!(
+                        "{key} = {v} не число, которое демон может прочитать"
+                    )),
+                );
                 0
             }),
         }
@@ -398,11 +415,14 @@ fn params_from_conf(conf: &ConfFile, version: AwgVersion) -> (VersionedParams, V
                     h[i] = r.lo;
                     hi[i] = r.hi;
                 }
-                None => found.push(Violation::err(
-                    key.clone(),
-                    "conf.not_a_number",
-                    format!("{key} = {v} is neither a number nor a lo-hi range"),
-                )),
+                None => found.push(
+                    Violation::err(
+                        key.clone(),
+                        "conf.not_a_number",
+                        format!("{key} = {v} is neither a number nor a lo-hi range"),
+                    )
+                    .ru(format!("{key} = {v} не число и не диапазон lo-hi")),
+                ),
             }
         }
     }
@@ -422,22 +442,28 @@ fn params_from_conf(conf: &ConfFile, version: AwgVersion) -> (VersionedParams, V
                     key.copy_from_slice(&raw);
                     p.header_protection_key = Some(key);
                 }
-                _ => found.push(Violation::err(
-                    "HeaderProtectionKey",
-                    "conf.bad_hpk",
-                    "HeaderProtectionKey is not 32 bytes of base64",
-                )),
+                _ => found.push(
+                    Violation::err(
+                        "HeaderProtectionKey",
+                        "conf.bad_hpk",
+                        "HeaderProtectionKey is not 32 bytes of base64",
+                    )
+                    .ru("HeaderProtectionKey не 32 байта в base64"),
+                ),
             }
         }
         let mut range = |key: &str| {
             let v = conf.get(key)?;
             let r = parse_range(v);
             if r.is_none() {
-                found.push(Violation::err(
-                    key,
-                    "conf.not_a_number",
-                    format!("{key} = {v} is neither a number nor a lo-hi range"),
-                ));
+                found.push(
+                    Violation::err(
+                        key,
+                        "conf.not_a_number",
+                        format!("{key} = {v} is neither a number nor a lo-hi range"),
+                    )
+                    .ru(format!("{key} = {v} не число и не диапазон lo-hi")),
+                );
             }
             r
         };
@@ -542,11 +568,14 @@ pub fn audit(text: &str, conf: &ConfFile) -> Vec<Violation> {
             "Interface" => INTERFACE_KEYS,
             "Peer" => PEER_KEYS,
             other => {
-                found.push(Violation::err(
-                    format!("[{other}]"),
-                    "conf.unknown_section",
-                    format!("[{other}] is not a section wg-quick knows"),
-                ));
+                found.push(
+                    Violation::err(
+                        format!("[{other}]"),
+                        "conf.unknown_section",
+                        format!("[{other}] is not a section wg-quick knows"),
+                    )
+                    .ru(format!("[{other}] это не секция, которую знает wg-quick")),
+                );
                 continue;
             }
         };
@@ -561,18 +590,23 @@ pub fn audit(text: &str, conf: &ConfFile) -> Vec<Violation> {
                          unrecognized` and refuses the whole config",
                         section.name
                     ),
-                ));
+                ).ru(format!("{k} не входит в ключи, которые amneziawg-tools читает в [{}]: он ответит `Line unrecognized` и отвергнет весь конфиг", section.name)));
             }
             if !seen.insert(k.as_str())
                 && section.name == "Interface"
                 && k != "Address"
                 && k != "DNS"
             {
-                found.push(Violation::warn(
-                    k.clone(),
-                    "conf.duplicate_key",
-                    format!("{k} is set twice; only one of the values will be used"),
-                ));
+                found.push(
+                    Violation::warn(
+                        k.clone(),
+                        "conf.duplicate_key",
+                        format!("{k} is set twice; only one of the values will be used"),
+                    )
+                    .ru(format!(
+                        "{k} задан дважды; использоваться будет только одно значение"
+                    )),
+                );
             }
         }
     }
@@ -581,11 +615,14 @@ pub fn audit(text: &str, conf: &ConfFile) -> Vec<Violation> {
         return found;
     }
     if !has_section(text, "Interface") {
-        found.push(Violation::err(
-            "[Interface]",
-            "conf.no_interface",
-            "there is no [Interface] section",
-        ));
+        found.push(
+            Violation::err(
+                "[Interface]",
+                "conf.no_interface",
+                "there is no [Interface] section",
+            )
+            .ru("нет секции [Interface]"),
+        );
         return found;
     }
 
@@ -594,59 +631,79 @@ pub fn audit(text: &str, conf: &ConfFile) -> Vec<Violation> {
         .filter(|k| conf.get(k).is_none())
         .collect();
     if !missing.is_empty() && missing.iter().all(|k| has_commented_field(text, k)) {
-        found.push(Violation::info(
-            "[Interface]",
-            "conf.template",
-            format!(
-                "a template: {} left commented out to fill in",
-                missing.join(" and ")
-            ),
-        ));
+        found.push(
+            Violation::info(
+                "[Interface]",
+                "conf.template",
+                format!(
+                    "a template: {} left commented out to fill in",
+                    missing.join(" and ")
+                ),
+            )
+            .ru(format!(
+                "шаблон: {} закомментированы, их нужно заполнить",
+                missing.join(" и ")
+            )),
+        );
         return found;
     }
 
     let server = conf.get("ListenPort").is_some();
     if peers.is_empty() {
-        found.push(Violation::warn(
-            "[Peer]",
-            "conf.no_peer",
-            "there is no [Peer] section",
-        ));
+        found.push(
+            Violation::warn("[Peer]", "conf.no_peer", "there is no [Peer] section")
+                .ru("нет секции [Peer]"),
+        );
     }
     for k in missing {
-        found.push(Violation::err(
-            k,
-            "conf.missing_field",
-            format!("{k} is required and missing"),
-        ));
+        found.push(
+            Violation::err(
+                k,
+                "conf.missing_field",
+                format!("{k} is required and missing"),
+            )
+            .ru(format!("{k} обязателен и отсутствует")),
+        );
     }
     match conf.get("PrivateKey") {
-        Some(SERVER_KEY_PLACEHOLDER) => found.push(Violation::info(
-            "PrivateKey",
-            "conf.key_placeholder",
-            "the private key is the placeholder install fills in on the server",
-        )),
-        Some(k) if !is_wireguard_key(k) => found.push(Violation::err(
-            "PrivateKey",
-            "conf.bad_key",
-            "PrivateKey is not a WireGuard key: 32 bytes of base64, 44 characters",
-        )),
+        Some(SERVER_KEY_PLACEHOLDER) => found.push(
+            Violation::info(
+                "PrivateKey",
+                "conf.key_placeholder",
+                "the private key is the placeholder install fills in on the server",
+            )
+            .ru("закрытый ключ это заглушка, которую install заполняет на сервере"),
+        ),
+        Some(k) if !is_wireguard_key(k) => found.push(
+            Violation::err(
+                "PrivateKey",
+                "conf.bad_key",
+                "PrivateKey is not a WireGuard key: 32 bytes of base64, 44 characters",
+            )
+            .ru("PrivateKey не похож на ключ WireGuard: нужно 32 байта в base64, 44 символа"),
+        ),
         _ => {}
     }
 
     for (i, peer) in peers.iter().enumerate() {
         let n = i + 1;
         match peer.get("PublicKey") {
-            None => found.push(Violation::err(
-                format!("PublicKey#{n}"),
-                "conf.peer_missing_field",
-                format!("peer #{n} has no PublicKey"),
-            )),
-            Some(k) if !is_wireguard_key(k) => found.push(Violation::err(
-                format!("PublicKey#{n}"),
-                "conf.peer_bad_key",
-                format!("peer #{n}: PublicKey is not a WireGuard key"),
-            )),
+            None => found.push(
+                Violation::err(
+                    format!("PublicKey#{n}"),
+                    "conf.peer_missing_field",
+                    format!("peer #{n} has no PublicKey"),
+                )
+                .ru(format!("у пира #{n} нет PublicKey")),
+            ),
+            Some(k) if !is_wireguard_key(k) => found.push(
+                Violation::err(
+                    format!("PublicKey#{n}"),
+                    "conf.peer_bad_key",
+                    format!("peer #{n}: PublicKey is not a WireGuard key"),
+                )
+                .ru(format!("пир #{n}: PublicKey не похож на ключ WireGuard")),
+            ),
             _ => {}
         }
         // A server's peers are the clients, and it does not dial them.
@@ -657,12 +714,12 @@ pub fn audit(text: &str, conf: &ConfFile) -> Vec<Violation> {
                 format!(
                     "peer #{n} has no Endpoint, and this side has no ListenPort to be dialled on"
                 ),
-            )),
+            ).ru(format!("у пира #{n} нет Endpoint, а у этой стороны нет ListenPort, чтобы её вызывали"))),
             Some(e) if !is_endpoint(e) => found.push(Violation::warn(
                 format!("Endpoint#{n}"),
                 "conf.peer_bad_endpoint",
                 format!("peer #{n}: Endpoint {e} is not host:port"),
-            )),
+            ).ru(format!("пир #{n}: Endpoint {e} не в формате host:port"))),
             _ => {}
         }
     }
@@ -814,6 +871,38 @@ mod tests {
             r.findings
         );
         assert!(codes(&check("vpn://AAAA", &CheckOptions::default())).contains(&"conf.bad_link"));
+    }
+
+    #[test]
+    fn every_finding_speaks_russian_too() {
+        let inputs = [
+            "Jc = 200\nJmin = 50\nJmax = 40\nH1 = 1-5\nH2 = 3-9\nH3 = 2\nH4 = 2\nS1 = 2000\n\
+             S2 = 1888\nS3 = 0\nS4 = 40\nI1 = <b 0x01><c><zz>\nI2 = <b 0x01><rc 4><t><t>\n\
+             RandomTrailers = 1\nDisableCookies = 1\nContentPaddingAddition = 0\n\
+             HeaderProtectionKey = AAAA\nRekeyAfterTime = 500\nRejectAfterTime = 10\n\
+             RekeyTimeout = 5\nKeepaliveTimeout = 10\nFoo = 1\n",
+            "[Interface]\nPrivateKey = short\n[Peer]\nPublicKey = x\nEndpoint = nowhere\n[Bogus]\n",
+            "[Interface]\nAddress = 10.0.0.2/32\nPrivateKey = __SERVER_PRIVATE_KEY__\n",
+            "[Interface]\n# PrivateKey =\n# Address =\nJc = 4\n",
+            "vpn://AAAA",
+            "[Interface]\nPrivateKey = yNMDBJ4Vd3nZuJ2FZ1ChNTvHNQg1KgLpOaOtQC8LSXY=\nAddress = 10.0.0.2/32\n",
+            "Jc = x\nJmax = 2000\nMTU = 1280",
+        ];
+        let wiresock = versions::client("wiresock").unwrap();
+        for input in inputs {
+            for client in [default_client(), wiresock] {
+                let r = check(
+                    input,
+                    &CheckOptions {
+                        client,
+                        ..Default::default()
+                    },
+                );
+                for f in &r.findings {
+                    assert!(f.message_ru.is_some(), "{} has no Russian text", f.code);
+                }
+            }
+        }
     }
 
     #[test]
