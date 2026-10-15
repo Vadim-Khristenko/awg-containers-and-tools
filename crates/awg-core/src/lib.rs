@@ -17,6 +17,7 @@ pub mod presets;
 pub mod profile;
 pub mod render;
 pub mod rng;
+pub mod saved;
 pub mod support;
 pub mod update;
 pub mod versions;

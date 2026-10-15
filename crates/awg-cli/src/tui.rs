@@ -20,6 +20,7 @@ use awg_core::engines::Engine;
 use awg_core::mimic::hostdb::Region;
 use awg_core::mimic::{BrowserProfile, MimicProfile};
 use awg_core::rng::SecureRng;
+use awg_core::saved::{self, SavedSet};
 use awg_core::versions::{
     self, AwgVersion, ClientCapability, GenOptions, Level, VersionedParams, Violation,
 };
@@ -71,6 +72,8 @@ impl Screen {
 /// so nothing is reachable from the flags alone.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Field {
+    /// A saved set: choosing one loads every knob below from it.
+    Set,
     Version,
     Profile,
     Client,
@@ -102,7 +105,8 @@ enum Field {
 }
 
 impl Field {
-    const ALL: [Field; 28] = [
+    const ALL: [Field; 29] = [
+        Field::Set,
         Field::Version,
         Field::Profile,
         Field::Client,
@@ -135,6 +139,7 @@ impl Field {
 
     fn label(self, lang: Lang) -> &'static str {
         match self {
+            Field::Set => t(lang, K::LblSet),
             Field::Version => t(lang, K::LblVersion),
             Field::Profile => t(lang, K::LblProfile),
             Field::Client => t(lang, K::LblClient),
@@ -192,6 +197,13 @@ pub struct App {
     /// The check screen: what was typed, and what the last run found.
     check_input: String,
     check_report: Option<CheckReport>,
+    /// Where saved sets live; `None` when the platform gives no config dir.
+    config_dir: Option<std::path::PathBuf>,
+    sets: Vec<SavedSet>,
+    /// The set last loaded on the generate screen, if any.
+    set_idx: Option<usize>,
+    /// While typing a name to save the current options under.
+    naming: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -224,6 +236,10 @@ impl App {
             quit: false,
             check_input: String::new(),
             check_report: None,
+            config_dir: awg_core::profile::default_config_dir().ok(),
+            sets: Vec::new(),
+            set_idx: None,
+            naming: None,
         }
     }
 
@@ -340,6 +356,21 @@ impl App {
         let field = Field::ALL[self.field_idx];
         let o = &mut self.opts;
         match field {
+            Field::Set => {
+                self.sets = self.load_sets();
+                let n = self.sets.len() + 1;
+                let at = self.set_idx.map_or(0, |i| i + 1);
+                match wrap(at, n, delta) {
+                    0 => self.set_idx = None,
+                    i => {
+                        self.set_idx = Some(i - 1);
+                        if let Err(e) = self.apply_set(i - 1) {
+                            self.status = Some((e.to_string(), Status::Bad));
+                            return;
+                        }
+                    }
+                }
+            }
             Field::Version => {
                 o.version = cycle(&AwgVersion::ALL, o.version, delta);
                 // Picking a version is picking a feature set, as in Architect:
@@ -405,6 +436,47 @@ impl App {
         self.regenerate();
     }
 
+    fn load_sets(&self) -> Vec<SavedSet> {
+        self.config_dir
+            .as_deref()
+            .and_then(|d| saved::load_all(d).ok())
+            .unwrap_or_default()
+    }
+
+    /// Load set `i` into every knob, including the client and its build.
+    fn apply_set(&mut self, i: usize) -> awg_core::Result<()> {
+        let opts = self.sets[i].to_options()?;
+        let set = &self.sets[i];
+        self.client_idx = versions::CLIENTS
+            .iter()
+            .position(|c| c.id == set.client)
+            .unwrap_or(0);
+        self.release_idx = set.client_release.as_deref().map_or(0, |r| {
+            versions::releases_of(&set.client)
+                .position(|x| x.id == r)
+                .map_or(0, |p| p + 1)
+        });
+        self.opts = opts;
+        Ok(())
+    }
+
+    /// Save the current knobs under the name being typed.
+    fn save_set(&mut self, name: &str) {
+        let name = name.trim();
+        let Some(dir) = self.config_dir.clone() else {
+            return;
+        };
+        self.opts.client = self.client();
+        match saved::save(&dir, SavedSet::from_options(name, &self.opts)) {
+            Ok(()) => {
+                self.sets = self.load_sets();
+                self.set_idx = self.sets.iter().position(|s| s.name == name);
+                self.status = Some((format!("{} {name}", t(self.lang, K::MsgSaved)), Status::Ok));
+            }
+            Err(e) => self.status = Some((e.to_string(), Status::Bad)),
+        }
+    }
+
     /// Read what was typed (a path, or a vpn:// link) and check it against the
     /// client and server engine chosen on the generate screen.
     fn run_check(&mut self) {
@@ -447,6 +519,35 @@ impl App {
     }
 
     fn on_key(&mut self, code: KeyCode) {
+        // Naming a set to save: the same rule, typing is input until Enter
+        // saves or Esc gives up.
+        if let Some(mut name) = self.naming.take() {
+            match code {
+                KeyCode::Esc => self.status = None,
+                KeyCode::Enter if !name.trim().is_empty() => self.save_set(&name),
+                KeyCode::Backspace => {
+                    name.pop();
+                    self.naming = Some(name);
+                }
+                KeyCode::Char(c) if c.is_ascii_alphanumeric() || "._-".contains(c) => {
+                    name.push(c);
+                    self.naming = Some(name);
+                }
+                _ => self.naming = Some(name),
+            }
+            if let Some(name) = &self.naming {
+                self.status = Some((
+                    format!("{} {name}█", t(self.lang, K::HintNaming)),
+                    Status::Ok,
+                ));
+            }
+            return;
+        }
+        if self.screen() == Screen::Generate && matches!(code, KeyCode::Char('w')) {
+            self.naming = Some(String::new());
+            self.status = Some((format!("{} █", t(self.lang, K::HintNaming)), Status::Ok));
+            return;
+        }
         // The check screen takes text, so letters and Backspace are input
         // there rather than quit and back. Esc still leaves.
         if self.screen() == Screen::Check {
@@ -547,6 +648,10 @@ impl App {
         let off = || on_off(self.lang, false);
         let current = || t(self.lang, K::ValCurrent).to_string();
         match f {
+            Field::Set => self
+                .set_idx
+                .and_then(|i| self.sets.get(i))
+                .map_or_else(|| "-".to_string(), |s| s.name.clone()),
             Field::Version => o.version.as_str().to_string(),
             Field::Profile => o.profile.label().to_string(),
             Field::Client => self.client_base().name.to_string(),
@@ -1146,6 +1251,7 @@ fn footer(app: &App, f: &mut ratatui::Frame, area: Rect) {
             spans.extend(key_hint("↑↓", t(app.lang, K::HintMove)));
             spans.extend(key_hint("←→", t(app.lang, K::HintChange)));
             spans.extend(key_hint("g", t(app.lang, K::HintRegenerate)));
+            spans.extend(key_hint("w", t(app.lang, K::HintSaveSet)));
             spans.extend(key_hint("PgUp/PgDn", t(app.lang, K::HintScroll)));
         }
         Screen::Servers => {
@@ -1364,6 +1470,56 @@ mod tests {
         a.on_key(KeyCode::Esc);
         assert_eq!(a.screen(), Screen::Home);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_set_saved_from_the_ui_loads_back_into_every_knob() {
+        let dir = std::env::temp_dir().join(format!("awg-tui-sets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = app();
+        a.config_dir = Some(dir.clone());
+        a.push(Screen::Generate);
+
+        // Windows before 2.0.2, STUN, 3.1.
+        a.client_idx = versions::CLIENTS
+            .iter()
+            .position(|c| c.id == "amneziawg-windows")
+            .unwrap();
+        select(&mut a, Field::Release);
+        a.adjust(1);
+        select(&mut a, Field::Version);
+        while a.opts.version != AwgVersion::V3_1 {
+            a.adjust(1);
+        }
+        a.opts.profile = MimicProfile::Stun;
+
+        a.on_key(KeyCode::Char('w'));
+        for c in "work".chars() {
+            a.on_key(KeyCode::Char(c));
+        }
+        // While naming, q is a letter of the name, not quit.
+        a.on_key(KeyCode::Char('q'));
+        assert!(!a.quit);
+        a.on_key(KeyCode::Backspace);
+        a.on_key(KeyCode::Enter);
+        assert_eq!(a.load_sets().len(), 1);
+
+        // Wander off, then load it back through the field.
+        a.opts = GenOptions::default();
+        a.client_idx = 0;
+        a.release_idx = 0;
+        a.set_idx = None;
+        select(&mut a, Field::Set);
+        a.adjust(1);
+        assert_eq!(a.opts.version, AwgVersion::V3_1);
+        assert_eq!(a.opts.profile, MimicProfile::Stun);
+        assert_eq!(
+            a.client().max_h_value,
+            2_147_483_647,
+            "the older build came back"
+        );
+        assert_eq!(a.field_value(Field::Set), "work");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

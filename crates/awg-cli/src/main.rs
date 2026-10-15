@@ -19,6 +19,7 @@ use awg_core::mimic::hostdb::{self, HostQuery, Region, Role};
 use awg_core::mimic::{BrowserProfile, MimicOptions, MimicProfile};
 use awg_core::rng::SecureRng;
 use awg_core::versions::{self, AwgVersion, ClientCapability, GenOptions, Level};
+use awg_core::{profile, saved};
 use i18n::{Key as K, Lang, t};
 
 const ARCHITECT_URL: &str = "https://architect.vai-rice.space";
@@ -34,6 +35,7 @@ fn main() {
         Some("profiles") => cmd_profiles(lang),
         Some("hosts") => cmd_hosts(&args, lang),
         Some("check") | Some("lint") => cmd_check(&args, lang),
+        Some("sets") => cmd_sets(&args, lang),
         Some("peer") | Some("peers") => ops::cmd_peer(&args, lang),
         Some("status") => ops::cmd_status(&args, lang),
         Some("logs") => ops::cmd_logs(&args, lang),
@@ -95,6 +97,8 @@ pub(crate) const VALUE_FLAGS: &[&str] = &[
     "--attempt",
     "--mimic-host",
     "--out",
+    "--set",
+    "--save",
 ];
 
 /// The first word that is neither a flag nor a flag's value.
@@ -179,6 +183,8 @@ fn usage(lang: Lang) {
     println!("  awg-tool clients");
     println!("      {}", t(lang, K::CmdClients));
     println!("  awg-tool profiles");
+    println!("  awg-tool gen [--set NAME] [... options] [--save NAME]");
+    println!("  awg-tool sets [list | show NAME | rm NAME]");
     println!(
         "  awg-tool peer add <label> [ip] [--out FILE] [--vpn] [--mihomo] | list | rm <label|pubkey>"
     );
@@ -268,14 +274,25 @@ fn bail(lang: Lang, key: K, given: &str, valid: &[&str]) -> ! {
 /// Everything `gen` and `install` share: the version, its preset, and every
 /// knob of the generator, read off the command line.
 pub(crate) fn gen_options(args: &[String], lang: Lang) -> GenOptions {
-    let raw_version = flag_value(args, "--version").unwrap_or_else(|| "3.0".into());
-    let Some(version) = AwgVersion::parse(&raw_version) else {
-        let valid: Vec<&str> = AwgVersion::ALL.iter().map(|v| v.as_str()).collect();
-        bail(lang, K::ErrUnknownVersion, &raw_version, &valid);
+    // The starting point: a saved set when one is named, otherwise the
+    // version's preset, as Architect applies it when the version changes.
+    // Every flag below overrides it only when it is actually given.
+    let mut base = match flag_value(args, "--set") {
+        Some(name) => load_set(&name, lang),
+        None => GenOptions::for_version(AwgVersion::V3_0),
     };
+    if let Some(v) = version_flag(args, lang)
+        && (v != base.version || flag_value(args, "--set").is_none())
+    {
+        base.version = v;
+        base.apply_preset();
+        // Narrow H was the CLI's own 3.1 default before presets; it stays,
+        // since it costs nothing and the trailers force it anyway.
+        base.narrow_h = v == AwgVersion::V3_1;
+    }
 
     let profile = match flag_value(args, "--profile") {
-        None => MimicProfile::QuicInitial,
+        None => base.profile,
         Some(raw) => match MimicProfile::parse(&raw) {
             Some(p) => p,
             None => {
@@ -284,14 +301,29 @@ pub(crate) fn gen_options(args: &[String], lang: Lang) -> GenOptions {
             }
         },
     };
-
-    let client = client_flag(args, lang);
-    let server_engine = engine_flag(args, lang);
-    let region = region_flag(args, "--region", lang);
-    let whitelisted_in = region_flag(args, "--whitelisted", lang);
-
+    let client = if has_flag(args, "--client") || has_flag(args, "--client-release") {
+        client_flag(args, lang)
+    } else {
+        base.client
+    };
+    let server_engine = if has_flag(args, "--server-engine") {
+        engine_flag(args, lang)
+    } else {
+        base.server_engine
+    };
+    let region = if has_flag(args, "--region") {
+        region_flag(args, "--region", lang)
+    } else {
+        base.mimic.region
+    };
+    let whitelisted_in = if has_flag(args, "--whitelisted") {
+        region_flag(args, "--whitelisted", lang)
+    } else {
+        base.mimic.whitelisted_in
+    };
     let browser = match flag_value(args, "--browser") {
-        None => None,
+        None => base.mimic.browser,
+        Some(raw) if raw == "off" || raw == "none" => None,
         Some(raw) => match BrowserProfile::parse(&raw) {
             Some(b) => Some(b),
             None => {
@@ -300,19 +332,14 @@ pub(crate) fn gen_options(args: &[String], lang: Lang) -> GenOptions {
             }
         },
     };
-
     let intensity = match flag_value(args, "--intensity").as_deref() {
         Some("low") => Intensity::Low,
+        Some("medium") => Intensity::Medium,
         Some("high") => Intensity::High,
-        _ => Intensity::Medium,
+        _ => base.intensity,
     };
-
-    // The version's preset is the starting point, as Architect applies it when
-    // the version changes; every switch below can still be turned either way.
-    let preset = GenOptions::for_version(version);
-
     let mtu = match flag_value(args, "--mtu") {
-        None => preset.mimic.mtu,
+        None => base.mimic.mtu,
         Some(raw) => match raw.parse::<u32>() {
             // Below the IPv4 minimum reassembly buffer there is no room for a
             // chain at all, and above 9000 nothing on the path will carry it.
@@ -320,64 +347,130 @@ pub(crate) fn gen_options(args: &[String], lang: Lang) -> GenOptions {
             _ => bail(lang, K::ErrBadMtu, &raw, &["576..9000"]),
         },
     };
-
-    let router_mode = has_flag(args, "--router");
     let junk_level = match flag_value(args, "--junk").as_deref() {
-        None => 5,
+        None => base.junk_level,
         Some(raw) => match raw.parse::<u8>() {
             Ok(n) if n <= 32 => n,
             _ => bail(lang, K::ErrBadJunk, raw, &["0..32"]),
         },
     };
     let iter_count = match flag_value(args, "--attempt").as_deref() {
-        None => 0,
+        None => base.mimic.iter_count,
         Some(raw) => match raw.parse::<u32>() {
             Ok(n) if n <= 100 => n,
             _ => bail(lang, K::ErrBadAttempt, raw, &["0..100"]),
         },
     };
-    let extreme = has_flag(args, "--extreme");
-    let defaults = MimicOptions::default();
+    let router_mode = switch(args, "--router", base.router_mode);
+    let custom_host = flag_value(args, "--mimic-host")
+        .or_else(|| flag_value(args, "--host"))
+        .or(base.mimic.custom_host.clone());
+    let m = &base.mimic;
     GenOptions {
-        version,
+        version: base.version,
         profile,
         intensity,
         client,
         server_engine,
         router_mode,
-        extreme,
+        extreme: switch(args, "--extreme", base.extreme),
         junk_level,
         // The 3.x switches. The capability gates inside generate() eat them
         // on versions that do not read them, so a switch on an older version
         // is a no-op rather than a config the device refuses.
-        header_protection: switch(args, "--header-protection", preset.header_protection),
-        content_padding: switch(args, "--content-padding", preset.content_padding),
-        random_timings: switch(args, "--random-timings", preset.random_timings),
-        random_trailers: switch(args, "--random-trailers", preset.random_trailers),
-        disable_cookies: switch(args, "--disable-cookies", preset.disable_cookies),
-        // Narrow H was the CLI's own 3.1 default before presets; it stays,
-        // since it costs nothing and the trailers force it anyway.
-        narrow_h: switch(args, "--narrow-h", version == AwgVersion::V3_1),
-        same_s: switch(args, "--same-s", preset.same_s),
-        disable_h: switch(args, "--disable-h", preset.disable_h),
+        header_protection: switch(args, "--header-protection", base.header_protection),
+        content_padding: switch(args, "--content-padding", base.content_padding),
+        random_timings: switch(args, "--random-timings", base.random_timings),
+        random_trailers: switch(args, "--random-trailers", base.random_trailers),
+        disable_cookies: switch(args, "--disable-cookies", base.disable_cookies),
+        narrow_h: switch(args, "--narrow-h", base.narrow_h),
+        same_s: switch(args, "--same-s", base.same_s),
+        disable_h: switch(args, "--disable-h", base.disable_h),
         mimic: MimicOptions {
             mtu,
-            mimic_all: has_flag(args, "--mimic-all"),
-            custom_host: flag_value(args, "--mimic-host").or_else(|| flag_value(args, "--host")),
+            mimic_all: switch(args, "--mimic-all", m.mimic_all),
+            custom_host,
             region,
             whitelisted_in,
             // Kept so old scripts still parse; generate() decides <c> from the
             // engines on both ends.
             tag_c: has_flag(args, "--tag-c"),
-            tag_t: switch(args, "--tag-t", defaults.tag_t),
-            tag_r: switch(args, "--tag-r", defaults.tag_r),
-            tag_rc: switch(args, "--tag-rc", defaults.tag_rc),
-            tag_rd: switch(args, "--tag-rd", defaults.tag_rd),
+            tag_t: switch(args, "--tag-t", m.tag_t),
+            tag_r: switch(args, "--tag-r", m.tag_r),
+            tag_rc: switch(args, "--tag-rc", m.tag_rc),
+            tag_rd: switch(args, "--tag-rd", m.tag_rd),
             browser,
             router_mode,
             iter_count,
-            ..defaults
+            ..MimicOptions::default()
         },
+    }
+}
+
+/// A saved set by name, or a clear refusal naming the ones there are.
+fn load_set(name: &str, lang: Lang) -> GenOptions {
+    let dir = profile::default_config_dir().unwrap_or_else(|e| {
+        eprintln!("awg-tool: {e}");
+        std::process::exit(2);
+    });
+    match saved::get(&dir, name) {
+        Ok(Some(set)) => set.to_options().unwrap_or_else(|e| {
+            eprintln!("awg-tool: {e}");
+            std::process::exit(2);
+        }),
+        Ok(None) => {
+            let names: Vec<String> = saved::load_all(&dir)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| s.name)
+                .collect();
+            let valid: Vec<&str> = names.iter().map(String::as_str).collect();
+            bail(lang, K::ErrUnknownSet, name, &valid);
+        }
+        Err(e) => {
+            eprintln!("awg-tool: {e}");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// `awg-tool sets [list | show NAME | rm NAME]`.
+fn cmd_sets(args: &[String], lang: Lang) {
+    let dir = profile::default_config_dir().unwrap_or_else(|e| {
+        eprintln!("awg-tool: {e}");
+        std::process::exit(2);
+    });
+    let at = args.iter().position(|a| a == "sets").map_or(0, |i| i + 1);
+    let words: Vec<&str> = args[at..]
+        .iter()
+        .filter(|a| !a.starts_with("--"))
+        .map(String::as_str)
+        .collect();
+    match (words.first().copied(), words.get(1).copied()) {
+        (None | Some("list" | "ls"), _) => {
+            let all = saved::load_all(&dir).unwrap_or_default();
+            if all.is_empty() {
+                println!("{}", t(lang, K::MsgNoSets));
+            }
+            for s in all {
+                println!(
+                    "  {:<16} AWG {:<4} {:<12} {}",
+                    s.name, s.version, s.profile, s.client
+                );
+            }
+        }
+        (Some("show"), Some(name)) => match saved::get(&dir, name) {
+            Ok(Some(s)) => println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default()),
+            _ => bail(lang, K::ErrUnknownSet, name, &[]),
+        },
+        (Some("rm" | "remove"), Some(name)) => match saved::remove(&dir, name) {
+            Ok(true) => println!("{} {name}", t(lang, K::MsgRemoved)),
+            _ => bail(lang, K::ErrUnknownSet, name, &[]),
+        },
+        _ => {
+            eprintln!("awg-tool sets [list | show NAME | rm NAME]");
+            std::process::exit(2);
+        }
     }
 }
 
@@ -385,6 +478,20 @@ fn cmd_gen(args: &[String], lang: Lang) {
     let opts = gen_options(args, lang);
     let (client, server_engine) = (opts.client, opts.server_engine);
     let (version, profile) = (opts.version, opts.profile);
+
+    // Written down before generating, so a set is saved even when the run
+    // is only meant to record the choice.
+    if let Some(name) = flag_value(args, "--save") {
+        let saved_to = profile::default_config_dir()
+            .and_then(|dir| saved::save(&dir, saved::SavedSet::from_options(&name, &opts)));
+        match saved_to {
+            Ok(()) => eprintln!("{} {name}", t(lang, K::MsgSaved)),
+            Err(e) => {
+                eprintln!("awg-tool: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     let params = match versions::generate(&mut SecureRng, &opts) {
         Ok(p) => p,
