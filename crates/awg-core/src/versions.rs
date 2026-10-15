@@ -396,8 +396,8 @@ pub const CLIENTS: [ClientCapability; 14] = [
         &["Windows", "macOS", "Linux", "Android"],
         Engine::Go,
         &[
-            "Reaches AWG 3.0 only with `version: 3` in the outbound options; below \
-             that it runs the older implementation, without header protection.",
+            "Runs AWG 3.0 and 3.1 only with `version: 3` in the outbound options (gen \
+             --mihomo writes it); without it the legacy implementation drops every 3.x option.",
             GO_NO_TAG_C,
         ],
     ),
