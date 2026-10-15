@@ -307,6 +307,9 @@ Known limits, so they are not a surprise:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) ([по-русски](RU.CONTRIBUTING.MD)).
 
+Справка для AI-агентов по установке, настройке, клиентам и диагностике:
+[`.agent/skills`](.agent/skills/README.md) (на русском, без дополнительных скриптов).
+
 ## Support the project
 
 ```bash

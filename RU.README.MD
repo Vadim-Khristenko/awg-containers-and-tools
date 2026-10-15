@@ -306,6 +306,10 @@ sha256sum -c checksums-v0.4.0.sha256
 
 Смотрите [RU.CONTRIBUTING.MD](RU.CONTRIBUTING.MD) ([in English](CONTRIBUTING.md)).
 
+Для работы с AI-агентами есть подробная [справка в `.agent/skills`](.agent/skills/README.md):
+установка по SSH и через Compose, настройка протокола и DNS, добавление и отзыв клиентов,
+диагностика, обновление и резервирование. Только документация, без дополнительных скриптов.
+
 ## Поддержать
 
 ```bash
