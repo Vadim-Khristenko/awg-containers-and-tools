@@ -340,6 +340,19 @@ if [ "$do_nat" = 1 ]; then
 fi
 
 log "$IFACE is up"
+# What node.vpn says about this node, next to the peer names: the protocol,
+# the daemon, the MTU and when it came up. Nothing a client's own config
+# does not already tell it.
+NAMES_DIR=$(dirname "${AWG_NAMES_FILE:-/var/lib/awg-names/names.hosts}")
+if [ -d "$NAMES_DIR" ] && [ -w "$NAMES_DIR" ]; then
+    {
+        echo "protocol=${AWG_PROTOCOL:-}"
+        echo "daemon=$(amneziawg-go --version 2>/dev/null | awk 'NR==1{print $NF}')"
+        echo "mtu=${IF[MTU]:-1420}"
+        echo "started=$(date +%s)"
+    } > "$NAMES_DIR/.node.txt.new" && chmod 644 "$NAMES_DIR/.node.txt.new" \
+        && mv -f "$NAMES_DIR/.node.txt.new" "$NAMES_DIR/node.txt" || true
+fi
 awg_event iface-up "addr=${IF[Address]}" "mtu=${IF[MTU]:-1420}" "port=${IF[ListenPort]:-none}" \
     "nat=$do_nat" "full_tunnel=$FULL_TUNNEL"
 
