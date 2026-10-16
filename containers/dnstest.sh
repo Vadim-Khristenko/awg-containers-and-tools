@@ -273,6 +273,19 @@ out_named=$(docker exec "$CLI" env AWG_CLIENT_DNS="$RESOLVER" awg-leak 2>&1)
 echo "$out_named" | head -2
 grep -q "docker's embedded" <<< "$out_named"; check $? "awg-leak names docker's embedded resolver instead of the tunnel's"
 
+# awg-mtu on a clean tunnel, then on one with a blackhole: the server drops
+# every forwarded packet over 1000 bytes without a word, the way a broken
+# path does, and the tool has to find the edge.
+out_mtu=$(docker exec "$CLI" awg-mtu 2>&1); rc_mtu=$?
+echo "$out_mtu"
+[ "$rc_mtu" = 0 ] && grep -q 'fits' <<< "$out_mtu"; check $? "awg-mtu finds the interface MTU fits a clean tunnel"
+docker exec "$SRV" iptables -I FORWARD -i awg0 -m length --length 1001: -j DROP
+out_mtu=$(docker exec "$CLI" awg-mtu --json 2>&1); rc_mtu=$?
+echo "$out_mtu"
+docker exec "$SRV" iptables -D FORWARD -i awg0 -m length --length 1001: -j DROP
+[ "$rc_mtu" = 1 ] && grep -q '"largest":1000,' <<< "$out_mtu" && grep -q '"advice":1000' <<< "$out_mtu"
+check $? "awg-mtu finds a blackhole at 1000 bytes and advises MTU 1000"
+
 # DIRECTION 7: what the operator configures, and what the node tells the
 # resolver, both answered to the tunnel client.
 hr "DIRECTION 7: allowlist, own records, the .vpn zone and peer names"

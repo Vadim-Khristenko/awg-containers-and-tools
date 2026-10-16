@@ -1,0 +1,101 @@
+#!/bin/sh
+# The largest packet that really makes it through the tunnel, measured from a
+# client node, and the MTU to write into the config for it.
+#
+#   awg-mtu [--json] [target]      default the tunnel resolver, 172.29.172.254
+#   AWG_MTU_MAX=1500               probe past the interface MTU, raising it for
+#                                  the duration and putting it back after
+#
+# A path that drops packets over some size does it silently: small answers
+# arrive and large ones never do, which reads as pages that load halfway.
+# Each probe is a ping of one size through the tunnel; a binary search finds
+# the largest that is answered, and that plus the IP and ICMP headers is the
+# MTU this tunnel can carry.
+#
+# Exit 0 when the interface MTU fits, 1 when it should be lowered, 2 when the
+# target does not answer even small packets.
+set -eu
+
+IFACE="${AWG_IFACE:-awg0}"
+JSON=0
+if [ "${1:-}" = --json ]; then JSON=1; shift; fi
+TARGET="${1:-${AWG_CLIENT_DNS:-172.29.172.254}}"
+HDR=28            # IPv4 20 + ICMP 8
+FLOOR=576         # what every IPv4 path must carry
+
+say() { [ "$JSON" = 1 ] || printf '%s\n' "$*"; }
+
+mtu=$(cat "/sys/class/net/$IFACE/mtu" 2>/dev/null) || mtu=
+if [ -z "$mtu" ]; then
+    echo "awg-mtu: $IFACE does not exist, there is no tunnel here" >&2
+    exit 2
+fi
+max="${AWG_MTU_MAX:-$mtu}"
+case "$max" in ""|*[!0-9]*) echo "awg-mtu: AWG_MTU_MAX must be a number" >&2; exit 2 ;; esac
+[ "$max" -ge "$FLOOR" ] || max=$FLOOR
+
+# Probing past the interface means raising it for a moment. Whatever happens,
+# it goes back.
+raised=0
+if [ "$max" -gt "$mtu" ]; then
+    if ip link set dev "$IFACE" mtu "$max" 2>/dev/null; then
+        raised=1
+        trap 'ip link set dev "$IFACE" mtu "$mtu" 2>/dev/null || true' EXIT INT TERM
+    else
+        say "cannot raise $IFACE past $mtu here, probing up to it"
+        max=$mtu
+    fi
+fi
+
+# Answered at all: two tries, a short wait each, so one lost packet on a
+# lossy link is not read as a size limit.
+fits() { ping -c 2 -W 2 -s "$(($1 - HDR))" "$TARGET" >/dev/null 2>&1; }
+
+say "awg-mtu: $IFACE MTU $mtu, probing $TARGET up to $max"
+if ! fits "$FLOOR"; then
+    if [ "$JSON" = 1 ]; then
+        printf '{"interface":"%s","target":"%s","mtu":%s,"largest":null,"fits":false,"advice":null}\n' "$IFACE" "$TARGET" "$mtu"
+    else
+        echo "$TARGET does not answer even $FLOOR-byte packets: nothing to measure" >&2
+    fi
+    exit 2
+fi
+
+lo=$FLOOR hi=$max
+if fits "$hi"; then
+    lo=$hi
+else
+    # lo is answered, hi is not.
+    while [ $((hi - lo)) -gt 1 ]; do
+        mid=$(((lo + hi) / 2))
+        if fits "$mid"; then lo=$mid; else hi=$mid; fi
+    done
+fi
+largest=$lo
+
+# Advice in steps of 8: what the daemons pad to, and a round number someone
+# will type into a config.
+advice=
+status=0
+if [ "$largest" -lt "$mtu" ]; then
+    advice=$((largest / 8 * 8))
+    status=1
+fi
+
+if [ "$JSON" = 1 ]; then
+    printf '{"interface":"%s","target":"%s","mtu":%s,"largest":%s,"fits":%s,"advice":%s}\n' \
+        "$IFACE" "$TARGET" "$mtu" "$largest" "$([ "$status" = 0 ] && echo true || echo false)" "${advice:-null}"
+    exit "$status"
+fi
+
+say "largest packet through the tunnel: $largest bytes"
+if [ "$status" = 0 ]; then
+    if [ "$raised" = 1 ] && [ "$largest" -gt "$mtu" ]; then
+        say "verdict: MTU $mtu fits, and the path would carry up to $largest"
+    else
+        say "verdict: MTU $mtu fits"
+    fi
+else
+    say "verdict: packets over $largest bytes are lost: set MTU = $advice under [Interface] in the config"
+fi
+exit "$status"
