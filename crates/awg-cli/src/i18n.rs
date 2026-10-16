@@ -168,6 +168,18 @@ strings! {
     StatusGenerated => ("Fresh parameters generated", "Сгенерирован новый набор параметров"),
     CmdClients => ("supported clients and their limits", "поддерживаемые клиенты и их ограничения"),
     CmdProfiles => ("available mimicry profiles", "доступные профили мимикрии"),
+    CmdSets => (
+        "saved generator settings: gen --save NAME writes one, --set NAME uses it",
+        "сохранённые настройки генератора: gen --save ИМЯ сохраняет, --set ИМЯ применяет"
+    ),
+    CmdCheck => (
+        "check a .conf or vpn:// link someone else wrote; exit 0 clean, 1 warnings, 2 errors",
+        "проверить чужой .conf или ссылку vpn://; код 0 чисто, 1 предупреждения, 2 ошибки"
+    ),
+    CmdPeer => (
+        "issue, list and revoke peers on a node, here or over SSH",
+        "выдать, показать и отозвать пиров на узле, здесь или по SSH"
+    ),
     CmdHosts => (
         "hosts the mimicry profiles may name, by role and region",
         "хосты, которые могут называть профили мимикрии, по ролям и регионам"

@@ -183,14 +183,18 @@ fn usage(lang: Lang) {
     println!("  awg-tool clients");
     println!("      {}", t(lang, K::CmdClients));
     println!("  awg-tool profiles");
+    println!("      {}", t(lang, K::CmdProfiles));
+    println!("  awg-tool hosts [--role quic] [--region ru] [--whitelisted ru] [--unknown]");
+    println!("      {}", t(lang, K::CmdHosts));
     println!("  awg-tool gen [--set NAME] [... options] [--save NAME]");
     println!("  awg-tool sets [list | show NAME | rm NAME]");
+    println!("      {}", t(lang, K::CmdSets));
+    println!("  awg-tool check <file|-|vpn://...> [--client X] [--version 3.1] [--json]");
+    println!("      {}", t(lang, K::CmdCheck));
     println!(
         "  awg-tool peer add <label> [ip] [--out FILE] [--vpn] [--mihomo] | list | rm <label|pubkey>"
     );
-    println!("  awg-tool check <file|-|vpn://...> [--client X] [--version 3.1] [--json]");
-    println!("  awg-tool hosts [--role quic] [--region ru] [--whitelisted ru] [--unknown]");
-    println!("      {}", t(lang, K::CmdProfiles));
+    println!("      {}", t(lang, K::CmdPeer));
     println!("  awg-tool status [--server NAME | --host ADDR]");
     println!("      {}", t(lang, K::CmdStatus));
     println!("  awg-tool doctor [CONTAINER]");
