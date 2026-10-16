@@ -24,6 +24,10 @@ PEERS_DIR="${AWG_PEERS_DIR:-/var/lib/awg/peers.d}"
 # The resolver from docker-compose.yml. A client config that points anywhere
 # else is a client whose DNS queries leave the tunnel.
 CLIENT_DNS="${AWG_CLIENT_DNS:-172.29.172.254}"
+# The network the resolver shares with the .vpn pages. A split-tunnel client
+# needs a route to all of it: with only the resolver's /32, amiunder.vpn
+# resolves through the tunnel and then its page cannot be reached.
+SERVICES_NET="${AWG_SERVICES_NET:-${CLIENT_DNS%.*}.0/24}"
 
 # shellcheck source=awg-log.sh
 . /usr/lib/awg/log.sh
@@ -133,7 +137,7 @@ $(conf_obfuscation)
 [Peer]
 PublicKey = $srv_pub
 PresharedKey = $psk
-AllowedIPs = ${AWG_CLIENT_ALLOWED:-${net}.0/24, ${CLIENT_DNS}/32}
+AllowedIPs = ${AWG_CLIENT_ALLOWED:-${net}.0/24, ${SERVICES_NET}}
 Endpoint = $endpoint
 PersistentKeepalive = 25
 EOF
