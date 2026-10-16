@@ -504,6 +504,10 @@ strings! {
     MsgPeerPrivate => (
         "The config holds the peer's private key: hand it over privately.",
         "В конфиге приватный ключ пира: передавайте его лично."
+    ),    HintRotate => ("rotate", "сменить обфускацию"),
+    AskRotateName => (
+        "Type the node's name to rotate it, Esc to leave it",
+        "Введите имя узла, чтобы сменить обфускацию, Esc чтобы не трогать"
     ),    MenuDoctor => ("diagnose", "диагностика"),
     MenuLogs => ("logs", "журнал"),
     PanelProfiles => ("Saved connections", "Сохранённые подключения"),

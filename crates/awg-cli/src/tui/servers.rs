@@ -41,6 +41,8 @@ pub enum Ask {
     Query,
     PeerAdd,
     PeerRm,
+    /// The node's own name, typed to confirm a rotation already shown.
+    Rotate,
 }
 
 impl Ask {
@@ -55,6 +57,7 @@ impl Ask {
                 Ask::Query => K::AskQuery,
                 Ask::PeerAdd => K::AskPeerAdd,
                 Ask::PeerRm => K::AskPeerRm,
+                Ask::Rotate => K::AskRotateName,
             },
         )
     }
@@ -64,7 +67,7 @@ impl Ask {
         c.is_ascii_alphanumeric()
             || match self {
                 Ask::PeerRm => "._-+/=".contains(c),
-                Ask::PeerAdd => "._-".contains(c),
+                Ask::PeerAdd | Ask::Rotate => "._-".contains(c),
                 _ => ".-_*".contains(c),
             }
     }
@@ -77,7 +80,7 @@ pub struct Servers {
     profile_idx: usize,
     pane: Pane,
     session: Option<Session>,
-    /// Only ever the account password, never a key passphrase — it is what
+    /// Only ever the account password, never a key passphrase: it is what
     /// `sudo -S` reads. See `crate::remote::Target`.
     sudo_password: Option<String>,
     sudo: bool,
@@ -93,6 +96,8 @@ pub struct Servers {
     /// Connected to this machine's docker rather than over SSH.
     local: bool,
     input: Option<(Ask, String)>,
+    /// A rotation worked out and shown, waiting for its confirmation.
+    pending: Option<awg_core::docker::rotate::RotationPlan>,
 }
 
 impl Servers {
@@ -114,6 +119,7 @@ impl Servers {
             local_row: false,
             local: false,
             input: None,
+            pending: None,
         }
     }
 
@@ -183,7 +189,7 @@ impl Servers {
                 None => {
                     self.message = Some((
                         format!(
-                            "{} — awg-tool status --server {}",
+                            "{} · awg-tool status --server {}",
                             t(lang, K::MsgNeedsCli),
                             p.name
                         ),
@@ -247,7 +253,7 @@ impl Servers {
         let Some(c) = self.containers.get(self.container_idx) else {
             return;
         };
-        let title = format!("{} — {}", t(lang, K::MenuDoctor), c.name);
+        let title = format!("{} · {}", t(lang, K::MenuDoctor), c.name);
         let lines = match docker::diagnose_container(&host, c, None) {
             Ok(d) => {
                 let mut out = Vec::new();
@@ -299,7 +305,7 @@ impl Servers {
         let Some(c) = self.containers.get(self.container_idx) else {
             return;
         };
-        let title = format!("{} — {}", t(lang, K::MenuLogs), c.name);
+        let title = format!("{} · {}", t(lang, K::MenuLogs), c.name);
         // Redaction happens in the core, on the way out of `docker::logs`.
         // Nothing on this side needs to know which fields were secret.
         let lines = match docker::logs(&host, &c.name, 400) {
@@ -407,7 +413,7 @@ impl Servers {
         };
         let mut lines: Vec<Line<'static>> = note.into_iter().collect();
         lines.extend(self.dns_lines(&host, &name, lang));
-        self.show(format!("DNS — {name}"), lines);
+        self.show(format!("DNS · {name}"), lines);
     }
 
     fn peer_lines(&self, host: &Host, node: &str, lang: Lang) -> Vec<Line<'static>> {
@@ -443,7 +449,7 @@ impl Servers {
         };
         let mut lines: Vec<Line<'static>> = note.into_iter().collect();
         lines.extend(self.peer_lines(&host, &node, lang));
-        self.show(format!("{} — {node}", t(lang, K::MenuPeers)), lines);
+        self.show(format!("{} · {node}", t(lang, K::MenuPeers)), lines);
     }
 
     /// Issue a peer: the config is shown and written next to the saved
@@ -489,9 +495,135 @@ impl Servers {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(link, theme::dim())));
         }
-        self.show(format!("{} — {node}", t(lang, K::MenuPeers)), lines);
+        self.show(format!("{} · {node}", t(lang, K::MenuPeers)), lines);
     }
 
+    /// Work out a rotation for the selected node and show it; nothing is
+    /// written until its name is typed back.
+    fn plan_rotation(&mut self, lang: Lang) {
+        use awg_core::docker::rotate;
+        let Some(host) = self.host() else { return };
+        let Some(name) = self.node() else { return };
+        let Some(node) = self.containers.iter().find(|c| c.name == name) else {
+            return;
+        };
+        let Some(version) = node.generation.and_then(|g| g.awg()) else {
+            return;
+        };
+        let opts = awg_core::versions::GenOptions::for_version(version);
+        let title = format!("{} · {name}", t(lang, K::HintRotate));
+        match rotate::plan(&host, node, &opts) {
+            Ok(plan) => {
+                let mut lines = vec![
+                    Line::from(Span::styled(
+                        format!(
+                            "{} {} (AWG {version})",
+                            t(lang, K::MsgRotating),
+                            plan.container
+                        ),
+                        theme::base(),
+                    )),
+                    Line::from(Span::styled(
+                        format!("  {}: {}", t(lang, K::LblConfigFile), plan.host_path),
+                        theme::dim(),
+                    )),
+                    Line::from(Span::styled(
+                        format!(
+                            "  {} ({}): {}",
+                            t(lang, K::LblChanges),
+                            plan.changed.len(),
+                            plan.changed.join(", ")
+                        ),
+                        theme::dim(),
+                    )),
+                ];
+                if let Ok(rows) = docker::peers::list(&host, &plan.container)
+                    && !rows.is_empty()
+                {
+                    let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "  {}: {}",
+                            t(lang, K::LblClientsToUpdate),
+                            labels.join(", ")
+                        ),
+                        theme::dim(),
+                    )));
+                }
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    t(lang, K::AskRotate),
+                    theme::warn(),
+                )));
+                self.show(title, lines);
+                self.pending = Some(plan);
+                self.input = Some((Ask::Rotate, String::new()));
+            }
+            Err(e) => {
+                let line = Line::from(Span::styled(e.to_string(), theme::error()));
+                self.show(title, vec![line]);
+            }
+        }
+    }
+
+    /// Apply the shown rotation once the node's name was typed back. The new
+    /// block is shown and written next to the issued configs, since every
+    /// client needs it.
+    fn rotate(&mut self, typed: &str, lang: Lang) {
+        use awg_core::docker::rotate;
+        let Some(plan) = self.pending.take() else {
+            return;
+        };
+        let title = format!("{} · {}", t(lang, K::HintRotate), plan.container);
+        if typed != plan.container {
+            let line = Line::from(Span::styled(t(lang, K::MsgAborted), theme::warn()));
+            return self.show(title, vec![line]);
+        }
+        let Some(host) = self.host() else { return };
+        let mut lines = Vec::new();
+        match rotate::apply(&host, &plan) {
+            Ok(a) if a.rolled_back => lines.push(Line::from(Span::styled(
+                format!("{} {}", t(lang, K::MsgRotateRolledBack), a.backup),
+                theme::error(),
+            ))),
+            Ok(a) => {
+                lines.push(Line::from(Span::styled(
+                    format!("✓ {} {}", t(lang, K::MsgRotated), a.backup),
+                    theme::ok(),
+                )));
+                let mut block = plan.client_block().join("\n");
+                block.push('\n');
+                let saved = profile::default_config_dir()
+                    .map(|d| d.join("issued"))
+                    .map_err(|e| e.to_string())
+                    .and_then(|dir| {
+                        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                        let path = dir.join(format!("{}-obfuscation.conf", plan.container));
+                        crate::ops::write_private(&path.to_string_lossy(), &block)
+                            .map_err(|e| e.to_string())?;
+                        Ok(path)
+                    });
+                if let Ok(p) = saved {
+                    lines.push(Line::from(Span::styled(
+                        format!("{} {}", t(lang, K::MsgWrote), p.display()),
+                        theme::dim(),
+                    )));
+                }
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    t(lang, K::MsgClientBlock),
+                    theme::base(),
+                )));
+                lines.extend(
+                    block
+                        .lines()
+                        .map(|l| Line::from(Span::styled(l.to_string(), theme::base()))),
+                );
+            }
+            Err(e) => lines.push(Line::from(Span::styled(e.to_string(), theme::error()))),
+        }
+        self.show(title, lines);
+    }
     fn run_ask(&mut self, ask: Ask, text: &str, lang: Lang) {
         let text = text.trim();
         if text.is_empty() {
@@ -506,6 +638,7 @@ impl Servers {
         };
         match ask {
             Ask::PeerAdd => self.add_peer(text, lang),
+            Ask::Rotate => self.rotate(text, lang),
             Ask::PeerRm => {
                 let (Some(host), Some(node)) = (self.host(), self.node()) else {
                     return;
@@ -532,7 +665,7 @@ impl Servers {
                     ),
                     Err(e) => lines.push(Line::from(Span::styled(e.to_string(), theme::error()))),
                 }
-                self.show(format!("DNS — {name}"), lines);
+                self.show(format!("DNS · {name}"), lines);
             }
             _ => {
                 let (Some(host), Some(name)) = (self.host(), self.resolver()) else {
@@ -580,6 +713,7 @@ impl Servers {
                 ("d", t(lang, K::MenuDoctor)),
                 ("p", t(lang, K::MenuPeers)),
                 ("+/-", t(lang, K::HintPeerAddRm)),
+                ("R", t(lang, K::HintRotate)),
                 ("n", "DNS"),
             ]);
         }
@@ -591,7 +725,7 @@ impl Servers {
     pub fn on_key(&mut self, code: KeyCode, lang: Lang) -> bool {
         if let Some((ask, mut text)) = self.input.take() {
             match code {
-                KeyCode::Esc => {}
+                KeyCode::Esc => self.pending = None,
                 KeyCode::Enter => self.run_ask(ask, &text, lang),
                 KeyCode::Backspace => {
                     text.pop();
@@ -618,6 +752,10 @@ impl Servers {
             KeyCode::Char('/') => Some(Ask::Query),
             KeyCode::Char('+') => Some(Ask::PeerAdd),
             KeyCode::Char('-') => Some(Ask::PeerRm),
+            KeyCode::Char('R') if connected => {
+                self.plan_rotation(lang);
+                return true;
+            }
             _ => None,
         };
         if let Some(ask) = ask.filter(|_| connected) {
