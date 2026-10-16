@@ -350,6 +350,17 @@ fn restore_remote_command(host_path: &str, backup: &str) -> Result<String> {
     Ok(format!("cat '{b}' > '{f}'"))
 }
 
+/// As the login user first: a config in someone's home directory is theirs,
+/// and sudo there would only ask for a password nobody gave. Root when that
+/// is refused. The commands start over cleanly, so a second run is safe.
+fn as_owner_then_root(host: &Host, cmd: &str) -> Result<(String, String, i32)> {
+    let first = host.run(cmd)?;
+    if first.2 == 0 {
+        return Ok(first);
+    }
+    host.run_root(cmd)
+}
+
 fn write(host: &Host, plan: &RotationPlan, backup: &str) -> Result<()> {
     if host.is_local() {
         let path = local_path(&plan.host_path);
@@ -359,7 +370,7 @@ fn write(host: &Host, plan: &RotationPlan, backup: &str) -> Result<()> {
             .map_err(|e| Error::Config(format!("writing {path}: {e}")));
     }
     let cmd = remote_rewrite_command(&plan.host_path, backup, &plan.client_block())?;
-    let (_, err, code) = host.run_root(&cmd)?;
+    let (_, err, code) = as_owner_then_root(host, &cmd)?;
     if code != 0 {
         return Err(Error::Config(format!(
             "rewriting {}: {}",
@@ -375,7 +386,8 @@ fn restore(host: &Host, plan: &RotationPlan, backup: &str) -> Result<()> {
         return std::fs::write(local_path(&plan.host_path), &plan.old_conf)
             .map_err(|e| Error::Config(format!("restoring {}: {e}", plan.host_path)));
     }
-    let (_, err, code) = host.run_root(&restore_remote_command(&plan.host_path, backup)?)?;
+    let (_, err, code) =
+        as_owner_then_root(host, &restore_remote_command(&plan.host_path, backup)?)?;
     if code != 0 {
         return Err(Error::Config(format!(
             "restoring {}: {}",
