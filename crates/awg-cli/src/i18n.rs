@@ -184,7 +184,32 @@ strings! {
         "the tunnel's resolver: state, block and allow lists, lookups",
         "резолвер туннеля: состояние, списки блокировки и разрешения, запросы"
     ),
-    CmdHosts => (
+    CmdUnder => (
+        "am I under the VPN? Asks the tunnel resolver and the amiunder.vpn page from this machine",
+        "я под VPN? Спрашивает резолвер туннеля и страницу amiunder.vpn с этой машины"
+    ),
+    UnderYes => (
+        "under the VPN: the page answered through the tunnel and sees this machine as",
+        "под VPN: страница ответила через туннель и видит эту машину как"
+    ),
+    UnderNo => (
+        "not under the VPN: the page did not answer, so traffic does not go through the tunnel",
+        "не под VPN: страница не ответила, трафик не идёт через туннель"
+    ),
+    UnderDnsNone => (
+        "no answer from the tunnel resolver",
+        "нет ответа от резолвера туннеля"
+    ),
+    UnderSystemYes => (
+        "this machine's own resolver knows .vpn: its DNS goes through the tunnel",
+        "свой резолвер этой машины знает .vpn: её DNS идёт через туннель"
+    ),
+    UnderSystemNo => (
+        "this machine's own resolver does not know .vpn: its DNS goes elsewhere, a leak if the tunnel is up",
+        "свой резолвер этой машины не знает .vpn: её DNS идёт мимо, при поднятом туннеле это утечка"
+    ),
+    ErrBadResolver => ("--resolver wants an IPv4 address", "--resolver ждёт адрес IPv4"),
+    ErrBadTimeout => ("--timeout wants seconds, 1 to 60", "--timeout ждёт секунды, от 1 до 60"),    CmdHosts => (
         "hosts the mimicry profiles may name, by role and region",
         "хосты, которые могут называть профили мимикрии, по ролям и регионам"
     ),

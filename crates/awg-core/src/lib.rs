@@ -30,6 +30,8 @@ pub mod vpn;
 pub mod docker;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ssh;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod under;
 
 use thiserror::Error as ThisError;
 

@@ -238,6 +238,21 @@ out_json=$(docker exec "$CLI" awg-under --json amiunder.vpn 2>&1)
 echo "$out_json"
 grep -q '"under":true' <<< "$out_json" && grep -q "\"tunnel_answer\":\"$STATUS_IP\"" <<< "$out_json"
 check $? "awg-under --json says the same"
+# The same question from `awg-tool under`, which is what a user runs on their
+# own machine. Only with a Linux build of it at hand: AWG_TOOL_LINUX=<path>.
+if [ -n "${AWG_TOOL_LINUX:-}" ]; then
+    docker cp "$AWG_TOOL_LINUX" "$CLI:/usr/local/bin/awg-tool" >/dev/null || exit 1
+    out_tool=$(docker exec "$CLI" awg-tool under 2>&1); rc_tool=$?
+    echo "$out_tool"
+    [ "$rc_tool" = 0 ] && grep -q "amiunder.vpn = $STATUS_IP @ $RESOLVER" <<< "$out_tool"
+    check $? "awg-tool under, from the client, asks the tunnel resolver and reaches the page"
+    out_tool=$(docker exec "$CLI" awg-tool under --json 2>&1)
+    echo "$out_tool"
+    grep -q '"under":true' <<< "$out_tool"; check $? "awg-tool under --json says the same"
+    docker cp "$AWG_TOOL_LINUX" "$BY1:/usr/local/bin/awg-tool" >/dev/null || exit 1
+    docker exec "$BY1" awg-tool under --timeout 2 >/dev/null 2>&1; rc_by_tool=$?
+    [ "$rc_by_tool" = 1 ]; check $? "awg-tool under says no from outside the tunnel"
+fi
 out_leak=$(docker exec "$CLI" awg-leak 2>&1); rc_leak=$?
 echo "$out_leak"
 [ "$rc_leak" = 0 ]; check $? "awg-leak finds no leak on the client"

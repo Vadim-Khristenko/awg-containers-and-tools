@@ -36,6 +36,7 @@ fn main() {
         Some("hosts") => cmd_hosts(&args, lang),
         Some("check") | Some("lint") => cmd_check(&args, lang),
         Some("sets") => cmd_sets(&args, lang),
+        Some("under") | Some("amiunder") => cmd_under(&args, lang),
         Some("dns") => ops::cmd_dns(&args, lang),
         Some("peer") | Some("peers") => ops::cmd_peer(&args, lang),
         Some("status") => ops::cmd_status(&args, lang),
@@ -100,6 +101,8 @@ pub(crate) const VALUE_FLAGS: &[&str] = &[
     "--out",
     "--set",
     "--save",
+    "--resolver",
+    "--timeout",
 ];
 
 /// The first word that is neither a flag nor a flag's value.
@@ -198,6 +201,8 @@ fn usage(lang: Lang) {
     println!("      {}", t(lang, K::CmdPeer));
     println!("  awg-tool dns [status] | block|unblock|allow|unallow NAME | query NAME");
     println!("      {}", t(lang, K::CmdDns));
+    println!("  awg-tool under [HOST] [--resolver 172.29.172.254] [--timeout 3] [--json]");
+    println!("      {}", t(lang, K::CmdUnder));
     println!("  awg-tool status [--server NAME | --host ADDR]");
     println!("      {}", t(lang, K::CmdStatus));
     println!("  awg-tool doctor [CONTAINER]");
@@ -726,6 +731,60 @@ fn cmd_hosts(args: &[String], lang: Lang) {
     }
 }
 
+/// `awg-tool under [host]`: the amiunder.vpn question asked from this machine.
+/// Exit 0 when the page answered, 1 when it did not, so a script can wait on
+/// the tunnel coming up.
+fn cmd_under(args: &[String], lang: Lang) {
+    let name = check_target(args).unwrap_or_else(|| "amiunder.vpn".to_string());
+    let resolver = match flag_value(args, "--resolver") {
+        None => std::net::Ipv4Addr::new(172, 29, 172, 254),
+        Some(raw) => match raw.trim().parse() {
+            Ok(ip) => ip,
+            Err(_) => {
+                eprintln!("{}: {raw}", t(lang, K::ErrBadResolver));
+                std::process::exit(2);
+            }
+        },
+    };
+    let secs = match flag_value(args, "--timeout") {
+        None => 3,
+        Some(raw) => match raw.trim().parse::<u64>() {
+            Ok(s) if (1..=60).contains(&s) => s,
+            _ => {
+                eprintln!("{}: {raw}", t(lang, K::ErrBadTimeout));
+                std::process::exit(2);
+            }
+        },
+    };
+    let r = awg_core::under::check(&name, resolver, std::time::Duration::from_secs(secs));
+
+    if has_flag(args, "--json") {
+        let v = serde_json::json!({
+            "under": r.under(),
+            "name": r.name,
+            "seen": r.seen,
+            "tunnel_resolver": r.resolver.to_string(),
+            "tunnel_answer": r.tunnel_answer.map(|a| a.to_string()),
+            "system_answer": r.system_answer.map(|a| a.to_string()),
+        });
+        println!("{v}");
+    } else {
+        match &r.seen {
+            Some(seen) => println!("{} {seen}", t(lang, K::UnderYes)),
+            None => println!("{}", t(lang, K::UnderNo)),
+        }
+        match r.tunnel_answer {
+            Some(a) => println!("  dns     {name} = {a} @ {resolver}"),
+            None => println!("  dns     {} {resolver}", t(lang, K::UnderDnsNone)),
+        }
+        if r.system_dns_in_tunnel() {
+            println!("  system  {}", t(lang, K::UnderSystemYes));
+        } else {
+            println!("  system  {}", t(lang, K::UnderSystemNo));
+        }
+    }
+    std::process::exit(if r.under() { 0 } else { 1 });
+}
 /// `--client`, with `--client-release` applied when given.
 fn client_flag(args: &[String], lang: Lang) -> &'static ClientCapability {
     let client = match flag_value(args, "--client") {
