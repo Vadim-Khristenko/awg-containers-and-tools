@@ -280,6 +280,11 @@ for f in "$PEERS_DIR"/*.peer; do
     unset PREQ
 done
 
+# The resolver answers <label>.peer.vpn from a names file the node keeps on a
+# volume of its own; rewrite it now, so peers issued before it existed have
+# names too. Without that volume there is nothing to write.
+AWG_PEERS_DIR="$PEERS_DIR" awg-peer names >/dev/null 2>&1 || true
+
 # --- network -----------------------------------------------------------------
 ip link set mtu "${IF[MTU]:-1420}" dev "$IFACE"
 IFS=',' read -ra _addrs <<< "${IF[Address]}"

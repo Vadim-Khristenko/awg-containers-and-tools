@@ -5,6 +5,7 @@
 #   awg-peer add <label> [ip]     new peer, prints the client config on stdout
 #   awg-peer list                 label, public key, allowed IP, last handshake
 #   awg-peer rm  <label|pubkey>   revoke
+#   awg-peer names                rewrite the resolver's names file
 #
 # Everything goes through the UAPI socket, for the same reason the entrypoint
 # does: `awg set` comes from amneziawg-tools, which cannot read the 3.0 keys and
@@ -73,6 +74,25 @@ label_of() {
     printf '(unlabelled)'
 }
 
+# The peers' names for the resolver: one `address label` line per peer, and
+# nothing else. peers.d holds preshared keys, so the resolver is given this
+# file on a volume of its own instead, and answers <label>.peer.vpn from it.
+NAMES_FILE="${AWG_NAMES_FILE:-/var/lib/awg-names/names.hosts}"
+write_names() {
+    local dir f label addr tmp
+    dir=$(dirname "$NAMES_FILE")
+    [ -d "$dir" ] || return 0
+    tmp=$(mktemp "$dir/.names.XXXXXX") || return 0
+    for f in "$PEERS_DIR"/*.peer; do
+        [ -e "$f" ] || continue
+        label=$(sed -n 's/^Label=//p' "$f")
+        addr=$(sed -n 's/^Address=//p' "$f")
+        [ -n "$label" ] && [ -n "$addr" ] && printf '%s %s\n' "${addr%%/*}" "$label"
+    done > "$tmp"
+    chmod 644 "$tmp"
+    mv -f "$tmp" "$NAMES_FILE"
+}
+
 # --- add ---------------------------------------------------------------------
 cmd_add() {
     local label=${1:-} ip=${2:-}
@@ -120,6 +140,7 @@ cmd_add() {
           "$label" "$pub" "$ip" "$psk" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$(peer_file "$label")" )
 
     awg_event peer-add "peer=$pub" "label=$label" "address=$ip"
+    write_names
 
     local port endpoint mtu
     port=$(conf_get ListenPort)
@@ -184,6 +205,7 @@ cmd_rm() {
     fi
     rm -f "$(peer_file "$label")"
     awg_event peer-remove "peer=$pub" "label=$label"
+    write_names
     printf 'removed %s (%s)\n' "$label" "$pub"
 }
 
@@ -191,5 +213,6 @@ case "${1:-}" in
     add)  shift; cmd_add "$@" ;;
     list) cmd_list ;;
     rm)   shift; cmd_rm "$@" ;;
-    *)    printf 'usage: awg-peer {add <label> [ip] | list | rm <label|pubkey>}\n' >&2; exit 2 ;;
+    names) write_names ;;
+    *)    printf 'usage: awg-peer {add <label> [ip] | list | rm <label|pubkey> | names}\n' >&2; exit 2 ;;
 esac
