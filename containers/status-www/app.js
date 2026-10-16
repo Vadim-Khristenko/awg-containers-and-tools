@@ -55,6 +55,9 @@ const I18N = {
             kRecursion: "Среднее время ответа",
             kUp: "Работает",
             kCanary: "Канарейка DoH",
+            kChain: "Резолверов в цепочке",
+            kChainFurther: "Ответили дальше по цепочке",
+            kZones: "Пересылаемых зон",
             kUpdated: "Обновлено",
             safe: "безопасный режим: файлы оператора не загрузились",
             noState: "Счётчики недоступны: том резолвера awg-dns-public не подключён к странице.",
@@ -172,6 +175,9 @@ const I18N = {
             kRecursion: "Average answer time",
             kUp: "Up for",
             kCanary: "DoH canary",
+            kChain: "Resolvers in the chain",
+            kChainFurther: "Answered further down the chain",
+            kZones: "Forwarded zones",
             kUpdated: "Updated",
             safe: "safe mode: the operator's files did not load",
             noState: "Counters unavailable: the resolver's awg-dns-public volume is not mounted for this page.",
@@ -316,6 +322,13 @@ function kv(text) {
         else out[k] = v;
     }
     return out;
+}
+
+/* Queries the chain's first resolver did not answer and a later one did. */
+function further(d) {
+    let n = 0;
+    for (let i = 1; i < (num(d["chain.upstreams"]) || 0); i++) n += num(d["chain." + i + ".answered"]) || 0;
+    return n;
 }
 
 function num(v) {
@@ -483,6 +496,9 @@ const page = {
                 rec !== null && rec > 0 ? row(t.kRecursion, Math.round(rec * 1000) + " " + T().ms) : null,
                 up !== null ? row(t.kUp, dur(up)) : null,
                 row(t.kCanary, canary.length ? canary.join(", ") : T().off),
+                num(d.zones) ? row(t.kZones, String(num(d.zones))) : null,
+                num(d["chain.upstreams"]) ? row(t.kChain, String(num(d["chain.upstreams"]))) : null,
+                num(d["chain.upstreams"]) ? row(t.kChainFurther, String(further(d))) : null,
                 upd !== null ? row(t.kUpdated, T().ago(Date.now() / 1000 - upd)) : null,
             ]));
         }
