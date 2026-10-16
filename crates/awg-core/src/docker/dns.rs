@@ -40,9 +40,55 @@ pub struct DnsStatus {
     pub managed_allow: Vec<String>,
     /// `unbound-control stats_noreset`, refreshed every minute.
     pub stats: BTreeMap<String, String>,
+    /// Forwarded zones, `zone server...` each.
+    pub zones: Vec<String>,
+    /// The chain's counters, `chain.N.answered` and the like.
+    pub chain: BTreeMap<String, String>,
+}
+
+/// One resolver in the chain, as its counters tell it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChainHop {
+    pub addr: String,
+    pub answered: u64,
+    /// Passed over, for any reason, timeouts included.
+    pub passed: u64,
+    pub timeouts: u64,
 }
 
 impl DnsStatus {
+    /// The chain in order, empty when there is none.
+    pub fn chain_hops(&self) -> Vec<ChainHop> {
+        let n: usize = self
+            .chain
+            .get("chain.upstreams")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let num =
+            |k: String| -> u64 { self.chain.get(&k).and_then(|v| v.parse().ok()).unwrap_or(0) };
+        (0..n.min(64))
+            .map(|i| {
+                let passed = [
+                    "timeout", "servfail", "refused", "nxdomain", "sinkhole", "invalid",
+                ]
+                .iter()
+                .map(|r| num(format!("chain.{i}.{r}")))
+                .sum();
+                ChainHop {
+                    // The inner resolver goes by the name chain.conf gives it.
+                    addr: match self.chain.get(&format!("chain.{i}.addr")) {
+                        Some(a) if a == "127.0.0.1:5301" => "default".to_string(),
+                        Some(a) => a.clone(),
+                        None => String::new(),
+                    },
+                    answered: num(format!("chain.{i}.answered")),
+                    passed,
+                    timeouts: num(format!("chain.{i}.timeout")),
+                }
+            })
+            .collect()
+    }
+
     pub fn stat(&self, key: &str) -> Option<u64> {
         self.stats
             .get(key)
@@ -106,6 +152,14 @@ pub fn parse_status(text: &str) -> DnsStatus {
             if !v.trim().is_empty() {
                 s.managed_allow.push(v.trim().to_string());
             }
+        } else if let Some(v) = line.strip_prefix("zone:") {
+            if !v.trim().is_empty() {
+                s.zones.push(v.trim().to_string());
+            }
+        } else if let Some(v) = line.strip_prefix("chain:")
+            && let Some((k, val)) = v.split_once('=')
+        {
+            s.chain.insert(k.to_string(), val.to_string());
         } else if let Some(v) = line.strip_prefix("stat:")
             && let Some((k, val)) = v.split_once('=')
         {
@@ -214,6 +268,25 @@ mod tests {
             "docker exec awg-dns awg-dns-list rm block x.com"
         );
         assert!(edit_command("awg dns", List::Block, "x.com", true).is_err());
+    }
+
+    #[test]
+    fn the_chain_and_the_zones_read_back() {
+        let s = parse_status(
+            "mode=recursive\nzone:geek. 185.121.177.177\nchain:chain.upstreams=2\n\
+             chain:chain.0.addr=127.0.0.1:5301\nchain:chain.0.answered=90\nchain:chain.0.nxdomain=7\n\
+             chain:chain.0.timeout=1\nchain:chain.1.addr=185.121.177.177:53\nchain:chain.1.answered=7\n",
+        );
+        assert_eq!(s.zones, ["geek. 185.121.177.177"]);
+        let hops = s.chain_hops();
+        assert_eq!(hops.len(), 2);
+        assert_eq!(
+            (hops[0].answered, hops[0].passed, hops[0].timeouts),
+            (90, 8, 1)
+        );
+        assert_eq!(hops[0].addr, "default");
+        assert_eq!(hops[1].addr, "185.121.177.177:53");
+        assert!(parse_status("mode=forward\n").chain_hops().is_empty());
     }
 
     #[test]

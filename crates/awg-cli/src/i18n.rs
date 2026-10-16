@@ -487,6 +487,11 @@ strings! {
         "Что там крутится и почему оно недовольно"
     ),
     LblThisMachine => ("this machine (docker)", "эта машина (docker)"),
+    LblZone => ("forwarded zone", "пересылаемая зона"),
+    LblChain => ("chain, asked in order", "цепочка, по порядку"),
+    LblAnswered => ("answered", "ответил"),
+    LblPassedOn => ("passed on", "передал дальше"),
+    LblTimeouts => ("silent", "молчал"),
     MenuPeers => ("peers", "пиры"),
     HintBlock => ("block/unblock", "блок/снять"),
     HintAllow => ("allow/unallow", "разрешить/снять"),

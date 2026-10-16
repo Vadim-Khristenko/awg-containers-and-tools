@@ -391,6 +391,37 @@ impl Servers {
                 theme::dim(),
             )));
         }
+        for z in &s.zones {
+            out.push(Line::from(Span::styled(
+                format!("  {}: {z}", t(lang, K::LblZone)),
+                theme::dim(),
+            )));
+        }
+        let hops = s.chain_hops();
+        if !hops.is_empty() {
+            out.push(Line::from(""));
+            out.push(Line::from(Span::styled(
+                format!("{}:", t(lang, K::LblChain)),
+                theme::base(),
+            )));
+            for (i, h) in hops.iter().enumerate() {
+                out.push(Line::from(vec![
+                    Span::styled(format!("  {}. {:<24}", i + 1, h.addr), theme::base()),
+                    Span::styled(
+                        format!(
+                            " {} {}  {} {} ({} {})",
+                            t(lang, K::LblAnswered),
+                            h.answered,
+                            t(lang, K::LblPassedOn),
+                            h.passed,
+                            t(lang, K::LblTimeouts),
+                            h.timeouts
+                        ),
+                        theme::dim(),
+                    ),
+                ]));
+            }
+        }
         for (label, names) in [("block", &s.managed_block), ("allow", &s.managed_allow)] {
             if names.is_empty() {
                 continue;

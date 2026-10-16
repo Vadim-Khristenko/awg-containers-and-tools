@@ -729,6 +729,26 @@ pub fn cmd_dns(args: &[String], lang: Lang) {
                 if !s.managed_allow.is_empty() {
                     println!("  allow: {}", s.managed_allow.join(", "));
                 }
+                for z in &s.zones {
+                    println!("  {}: {z}", t(lang, K::LblZone));
+                }
+                let hops = s.chain_hops();
+                if !hops.is_empty() {
+                    println!("  {}:", t(lang, K::LblChain));
+                    for (i, h) in hops.iter().enumerate() {
+                        println!(
+                            "    {}. {:<24} {} {}   {} {} ({} {})",
+                            i + 1,
+                            h.addr,
+                            t(lang, K::LblAnswered),
+                            h.answered,
+                            t(lang, K::LblPassedOn),
+                            h.passed,
+                            t(lang, K::LblTimeouts),
+                            h.timeouts
+                        );
+                    }
+                }
                 if let Some(q) = s.stat("total.num.queries") {
                     let hits = s.stat("total.num.cachehits").unwrap_or(0);
                     let share = (hits * 100).checked_div(q).unwrap_or(0);
