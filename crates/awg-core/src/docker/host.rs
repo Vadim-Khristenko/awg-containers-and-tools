@@ -108,19 +108,39 @@ fn run_local(cmd: &str, sudo: Option<&str>) -> Result<(String, String, i32)> {
         Some(_) => sudo_command(cmd),
     };
 
-    let (program, flag) = if cfg!(windows) {
-        ("cmd", "/C")
-    } else {
-        ("sh", "-c")
+    // cmd.exe knows nothing of single quotes, so `docker exec c sh -c '...'`
+    // arrives there in pieces, with its `2>&1` and `>` taken as cmd's own
+    // redirections. A plain command, one with no shell operator outside its
+    // quotes, is split the POSIX way and started directly instead; anything
+    // that needs a shell still gets one, and so does a word that is not a
+    // program at all but one of cmd's builtins (`echo`, `exit`).
+    let spawn = |mut c: Command| {
+        c.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
     };
-    let mut child = Command::new(program)
-        .arg(flag)
-        .arg(&full)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::Config(format!("could not run `{full}`: {e}")))?;
+    let shell = || {
+        let mut c = if cfg!(windows) {
+            Command::new("cmd")
+        } else {
+            Command::new("sh")
+        };
+        c.arg(if cfg!(windows) { "/C" } else { "-c" }).arg(&full);
+        c
+    };
+    let spawned = match posix_words(&full) {
+        Some(words) if cfg!(windows) && !words.is_empty() => {
+            let mut c = Command::new(&words[0]);
+            c.args(&words[1..]);
+            match spawn(c) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => spawn(shell()),
+                other => other,
+            }
+        }
+        _ => spawn(shell()),
+    };
+    let mut child = spawned.map_err(|e| Error::Config(format!("could not run `{full}`: {e}")))?;
 
     if let Some(pw) = sudo.filter(|p| !p.is_empty()) {
         use std::io::Write as _;
@@ -145,6 +165,69 @@ fn run_local(cmd: &str, sudo: Option<&str>) -> Result<(String, String, i32)> {
         text(&out.stderr),
         out.status.code().unwrap_or(-1),
     ))
+}
+
+/// A command split into words the way `sh` would split it, or `None` when it
+/// needs a shell: an operator, a redirection, an expansion or a glob outside
+/// quotes. Single quotes keep everything; double quotes keep everything but
+/// their own escapes; a backslash outside quotes escapes the next character.
+pub(crate) fn posix_words(cmd: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut it = cmd.chars().peekable();
+    while let Some(c) = it.next() {
+        match c {
+            '\'' => {
+                in_word = true;
+                loop {
+                    match it.next()? {
+                        '\'' => break,
+                        x => cur.push(x),
+                    }
+                }
+            }
+            '"' => {
+                in_word = true;
+                loop {
+                    match it.next()? {
+                        '"' => break,
+                        '\\' => match it.next()? {
+                            x @ ('"' | '\\' | '$' | '`') => cur.push(x),
+                            x => {
+                                cur.push('\\');
+                                cur.push(x);
+                            }
+                        },
+                        '$' | '`' => return None,
+                        x => cur.push(x),
+                    }
+                }
+            }
+            '\\' => {
+                in_word = true;
+                cur.push(it.next()?);
+            }
+            c if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            '|' | '&' | ';' | '<' | '>' | '(' | ')' | '$' | '`' | '*' | '?' | '[' | '#' | '~'
+            | '{' | '}' => {
+                return None;
+            }
+            c => {
+                in_word = true;
+                cur.push(c);
+            }
+        }
+    }
+    if in_word {
+        words.push(cur);
+    }
+    Some(words)
 }
 
 /// Command-name hygiene.
@@ -232,5 +315,50 @@ mod tests {
         for bad in ["a`b`", "x; id", "", "a b"] {
             assert!(safe_image(bad).is_err(), "{bad:?} was accepted");
         }
+    }
+
+    #[test]
+    fn a_plain_command_splits_like_sh_and_a_shell_one_is_left_to_a_shell() {
+        let w = posix_words("docker exec c sh -c 'echo a; ip -o link show awg0 2>&1' --x").unwrap();
+        assert_eq!(
+            w,
+            [
+                "docker",
+                "exec",
+                "c",
+                "sh",
+                "-c",
+                "echo a; ip -o link show awg0 2>&1",
+                "--x"
+            ]
+        );
+        let w = posix_words(r#"docker exec c printf "%s\n" "a \"b\"" it\'s"#).unwrap();
+        assert_eq!(
+            w,
+            ["docker", "exec", "c", "printf", "%s\\n", "a \"b\"", "it's"]
+        );
+        assert_eq!(posix_words("a '' b").unwrap(), ["a", "", "b"]);
+        for shell in [
+            "docker stop x >/dev/null 2>&1 || true",
+            "a && b",
+            "echo $HOME",
+            "echo \"$HOME\"",
+            "ls *",
+            "a | b",
+            "echo 'unterminated",
+        ] {
+            assert!(posix_words(shell).is_none(), "{shell:?} was split");
+        }
+    }
+
+    #[test]
+    fn a_quoted_script_reaches_a_local_process_whole() {
+        // git is on every machine this is built on; the quotes are what is
+        // being tested, so the same command must come out the same on sh and
+        // on Windows.
+        let Ok((out, _, 0)) = Host::local().run("git -c 'core.x=a b' config --get core.x") else {
+            return;
+        };
+        assert_eq!(out.trim(), "a b");
     }
 }
