@@ -1,7 +1,7 @@
 #!/bin/sh
 # Leak check, run inside the node's own namespace: which resolver this node is
-# configured with, whether that resolver is reachable through the tunnel, and
-# where the default route goes.
+# configured with, whether that resolver is reachable through the tunnel and
+# is the tunnel's own, and where the IPv4 and IPv6 default routes go.
 #
 #   awg-leak                 # a client node: DNS and routing
 #   AWG_CLIENT_DNS=1.1.1.1   # the resolver to expect (default 172.29.172.254)
@@ -13,64 +13,128 @@ set -eu
 IFACE="${AWG_IFACE:-awg0}"
 WANT_DNS="${AWG_CLIENT_DNS:-172.29.172.254}"
 CONF="${AWG_CONF:-/etc/amnezia/awg/${IFACE}.conf}"
+WAIT="${AWG_LEAK_DNS_TIMEOUT:-3}"
 LEAK=0
 line() { printf '%-10s %s\n' "$1" "$2"; }
+# nslookup's own timeout rather than timeout(1): killing it makes the shell
+# report the signal on the terminal.
+look() { nslookup -timeout="$WAIT" -retry=1 "$@" 2>&1; }
+# The first address in an answer, after the server's own.
+first() { awk '/^Name:/ { named = 1 } named && /^Address/ { sub(/^Address[^:]*: */, ""); print; exit }'; }
 
 # 1. The interface, and what this node is on the tunnel.
 mine=$(ip -o -4 addr show dev "$IFACE" 2>/dev/null | awk '{print $4}' | head -1) || true
 if [ -z "$mine" ]; then
-    line tunnel "DOWN — $IFACE has no IPv4 address"
+    line tunnel "DOWN: $IFACE has no IPv4 address"
     exit 1
 fi
 line tunnel "$IFACE $mine"
 
-# 2. Is this a full tunnel? It decides whether a resolver outside the tunnel is
-#    a finding or simply not this node's job, so it is answered before anything
-#    is called a leak.
-full=0
-if [ -r "$CONF" ] && grep -qE '^[[:space:]]*AllowedIPs[[:space:]]*=.*0\.0\.0\.0/0' "$CONF"; then
-    full=1
-fi
+# 2. Is this a full tunnel, and for which families? It decides whether a
+#    resolver or a route outside the tunnel is a finding or simply not this
+#    node's job, so it is answered before anything is called a leak.
+allowed=$( [ -r "$CONF" ] && grep -E '^[[:space:]]*AllowedIPs[[:space:]]*=' "$CONF" | cut -d= -f2- | tr -d ' ' | tr '\n' ',') || true
+full=0 full6=0
+case ",$allowed," in *,0.0.0.0/0,*) full=1 ;; esac
+case ",$allowed," in *,::/0,*) full6=1 ;; esac
 
 # 3. Which resolvers the node would actually use. A container gets docker's
 #    embedded resolver unless it was told otherwise: that one asks the host, so
-#    on a full tunnel it is a leak path — and it is also how the node resolves
+#    on a full tunnel it is a leak path, and it is also how the node resolves
 #    its own peers' names, which is why it is named rather than assumed.
 servers=$(awk '/^nameserver/{print $2}' /etc/resolv.conf 2>/dev/null | tr '\n' ' ' | sed 's/ *$//') || true
 case " $servers " in
     *" $WANT_DNS "*) line resolver "$servers (the tunnel's own)" ;;
     *" 127.0.0.11 "*)
         if [ "$full" = 1 ]; then
-            line resolver "$servers (docker's embedded — it asks the host, and this is a full tunnel)"
+            line resolver "$servers (docker's embedded: it asks the host, and this is a full tunnel)"
             LEAK=1
         else
-            line resolver "$servers (docker's embedded — asks the host)"
+            line resolver "$servers (docker's embedded: asks the host)"
         fi ;;
-    "")              line resolver "none configured — the platform default will be used"; LEAK=1 ;;
-    *)               line resolver "$servers — not $WANT_DNS"; LEAK=1 ;;
+    "  ")            line resolver "none configured: the platform default will be used"; LEAK=1 ;;
+    *)               line resolver "$servers: not $WANT_DNS"; LEAK=1 ;;
 esac
 
 # 4. Does it answer? A resolver that is configured but unreachable is a leak
 #    waiting for a fallback, and one that answers is proof the query travelled
 #    into the tunnel.
 probe="${AWG_LEAK_QUERY:-example.com}"
-if timeout 8 nslookup "$probe" "$WANT_DNS" >/dev/null 2>&1; then
+answered=0
+if look "$probe" "$WANT_DNS" | first | grep -q .; then
+    answered=1
     line dns "$WANT_DNS answered for $probe"
 else
     line dns "$WANT_DNS did not answer for $probe"
     LEAK=1
 fi
 
-# 5. Where the default route goes — only meaningful on a full tunnel, so the
-#    config is what decides whether this is a finding.
+# 5. Is it the tunnel's own? Anything on the path can answer example.com;
+#    only the tunnel's resolver answers resolver.vpn with its own address.
+#    Some networks answer DNS sent to any address themselves, and then the
+#    tunnel's address answers even with no tunnel at all. A resolver named on
+#    purpose with AWG_CLIENT_DNS is only reported; the default address
+#    answering as somebody else is the queries being intercepted.
+ours=0
+self=$(look resolver.vpn "$WANT_DNS" | first) || true
+if [ "$self" = "$WANT_DNS" ]; then
+    ours=1
+    line identity "resolver.vpn is $self: this is the tunnel's own resolver"
+elif [ "$answered" = 1 ] && [ -z "${AWG_CLIENT_DNS:-}" ]; then
+    line identity "$WANT_DNS answers, but not resolver.vpn: something on the path answers for it, the queries are intercepted"
+    LEAK=1
+else
+    line identity "$WANT_DNS does not answer resolver.vpn: not a resolver this node set up"
+fi
+
+# 6. Encrypted DNS in the browser skips the resolver altogether. Firefox keeps
+#    to the network's resolver when its canary name does not exist there.
+if [ "$ours" = 1 ]; then
+    if look use-application-dns.net "$WANT_DNS" | grep -q NXDOMAIN; then
+        line doh "the resolver answers Firefox's canary NXDOMAIN: Firefox keeps to it"
+    else
+        line doh "the resolver answers Firefox's canary: Firefox may use its own DoH and skip it (AWG_DNS_CANARY)"
+    fi
+fi
+
+# 7. Whether this node's own lookups reach the tunnel resolver: a name only
+#    it answers, asked the way every program on the node asks.
+if [ "$ours" = 1 ]; then
+    if [ -n "$(look resolver.vpn | first)" ]; then
+        line system "the node's own lookups reach the tunnel resolver"
+    else
+        line system "the node's own lookups do not reach the tunnel resolver"
+    fi
+fi
+
+# 8. Where the default routes go. Only meaningful on a full tunnel, so the
+#    config is what decides whether each is a finding.
 default=$(ip route show default 2>/dev/null | awk 'NR==1{print $3, $5}') || true
 if [ "$full" = 1 ]; then
     case " ${default:-} " in
-        *" $IFACE ") line default "via $IFACE — the tunnel" ;;
-        *)          line default "${default:-none} — not the tunnel"; LEAK=1 ;;
+        *" $IFACE ") line default "via $IFACE: the tunnel" ;;
+        *)          line default "${default:-none}: not the tunnel"; LEAK=1 ;;
     esac
 else
     line default "${default:-none} (not a full tunnel, so this is expected)"
+fi
+
+# IPv6 is where a full IPv4 tunnel most often leaks: a config with 0.0.0.0/0
+# and no ::/0 leaves every IPv6 connection on the old path.
+v6=$(ip -6 route show default 2>/dev/null | awk 'NR==1 { for (i = 1; i < NF; i++) if ($i == "dev") print $(i + 1) }') || true
+if [ -z "$v6" ]; then
+    line ipv6 "no IPv6 default route: nothing to leak"
+elif [ "$v6" = "$IFACE" ]; then
+    line ipv6 "via $IFACE: the tunnel"
+elif [ "$full6" = 1 ] || [ "$full" = 1 ]; then
+    if [ "$full6" = 1 ]; then
+        line ipv6 "via $v6: not the tunnel, though AllowedIPs has ::/0"
+    else
+        line ipv6 "via $v6: AllowedIPs has 0.0.0.0/0 but not ::/0, so IPv6 leaves outside the tunnel"
+    fi
+    LEAK=1
+else
+    line ipv6 "via $v6 (not a full tunnel, so this is expected)"
 fi
 
 if [ "$LEAK" = 0 ]; then

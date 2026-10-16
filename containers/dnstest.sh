@@ -256,6 +256,8 @@ fi
 out_leak=$(docker exec "$CLI" awg-leak 2>&1); rc_leak=$?
 echo "$out_leak"
 [ "$rc_leak" = 0 ]; check $? "awg-leak finds no leak on the client"
+grep -q '^identity.*tunnel.s own resolver' <<< "$out_leak"; check $? "awg-leak knows the resolver is the tunnel's own (resolver.vpn)"
+grep -q '^doh.*Firefox keeps to it' <<< "$out_leak"; check $? "...and that Firefox's DoH canary is switched off"
 # The client's own resolver is docker's embedded one — the tunnel resolver has
 # to be asked for by address — so what this asserts is that the tool says so
 # instead of reporting a resolver the node does not have. The proof that it can

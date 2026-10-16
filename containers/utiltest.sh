@@ -34,7 +34,7 @@ cleanup
 docker network create "$UNET" >/dev/null || exit 1
 
 hr "a node with no tunnel says so"
-docker run -d --name "$NODE" --network "$UNET" --cap-add NET_ADMIN --entrypoint sleep "$IMG" 600 >/dev/null || exit 1
+docker run -d --name "$NODE" --network "$UNET" --cap-add NET_ADMIN --sysctl net.ipv6.conf.all.disable_ipv6=0 --entrypoint sleep "$IMG" 600 >/dev/null || exit 1
 out=$(docker exec "$NODE" awg-health 2>&1); rc=$?
 echo "$out"
 [ "$rc" != 0 ]; check $? "awg-health fails when there is no interface"
@@ -56,6 +56,16 @@ echo "$out"
 [ "$rc" != 0 ]; check $? "awg-leak fails a full tunnel whose default route is elsewhere"
 grep -q 'not the tunnel' <<< "$out"; check $? "...and says which line is the leak"
 grep -q '^tunnel' <<< "$out"; check $? "...while still reporting the interface it looked at"
+
+# IPv6 next to a full IPv4 tunnel: the commonest leak a copied config has.
+docker exec "$NODE" sh -c 'ip link add v6out type dummy && ip link set v6out up && ip -6 addr add fd00:99::2/64 dev v6out nodad && ip -6 route add default via fd00:99::1 dev v6out'
+out=$(docker exec "$NODE" awg-leak 2>&1)
+echo "$out" | grep '^ipv6'
+grep -q '^ipv6.*not ::/0, so IPv6 leaves outside the tunnel' <<< "$out"; check $? "awg-leak finds IPv6 leaving beside a 0.0.0.0/0 tunnel"
+docker exec "$NODE" sh -c 'ip -6 addr add fd00:98::2/64 dev awg0 nodad && ip -6 route replace default dev awg0 && sed -i "s|0.0.0.0/0|0.0.0.0/0, ::/0|" /etc/amnezia/awg/awg0.conf'
+out=$(docker exec "$NODE" awg-leak 2>&1)
+echo "$out" | grep '^ipv6'
+grep -q '^ipv6.*via awg0: the tunnel' <<< "$out"; check $? "...and passes it once ::/0 and the route go into the tunnel"
 
 # The interface is there now, so this is the other half of the health check:
 # up does not mean answering.
