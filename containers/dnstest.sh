@@ -227,6 +227,17 @@ hr "DIRECTION 6 — awg-under and awg-leak, inside the client"
 out_under=$(docker exec "$CLI" awg-under "$STATUS_IP" 2>&1); rc_under=$?
 echo "$out_under"
 [ "$rc_under" = 0 ]; check $? "awg-under says the client is under the VPN"
+# By name, the way a user asks it. The client's own resolver is docker's and
+# does not know .vpn, so this also proves awg-under reaches the page through
+# the tunnel resolver's answer rather than the system's.
+out_name=$(docker exec "$CLI" awg-under amiunder.vpn 2>&1); rc_name=$?
+echo "$out_name"
+[ "$rc_name" = 0 ] && grep -q "is $STATUS_IP at the tunnel resolver" <<< "$out_name"
+check $? "awg-under amiunder.vpn resolves through the tunnel and reaches the page"
+out_json=$(docker exec "$CLI" awg-under --json amiunder.vpn 2>&1)
+echo "$out_json"
+grep -q '"under":true' <<< "$out_json" && grep -q "\"tunnel_answer\":\"$STATUS_IP\"" <<< "$out_json"
+check $? "awg-under --json says the same"
 out_leak=$(docker exec "$CLI" awg-leak 2>&1); rc_leak=$?
 echo "$out_leak"
 [ "$rc_leak" = 0 ]; check $? "awg-leak finds no leak on the client"
