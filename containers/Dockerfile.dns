@@ -13,6 +13,13 @@
 # unbound resolves from the root zone itself rather than forwarding to a public
 # resolver: forwarding would move the leak rather than close it — the whole
 # query stream would just be legible to whoever runs 1.1.1.1 instead.
+# awg-dns-chain, the resolver chain: plain Rust, no dependencies, built here
+# from containers/dns-chain alone.
+FROM rust:1-alpine AS chain
+WORKDIR /src
+COPY dns-chain/ ./
+RUN cargo build --release && strip target/release/awg-dns-chain
+
 FROM alpine:3.24
 ARG BUILD_DATE=1970-01-01T00:00:00Z
 ARG AWG_DNS_ADDRESS=172.29.172.254
@@ -41,13 +48,14 @@ LABEL org.opencontainers.image.title="amnezia-wg-dns — tunnel-only resolver (u
 RUN apk add --no-cache unbound libcap \
  && rm -rf /var/cache/apk/* /usr/share/man \
  && mkdir -p /var/log/unbound /etc/unbound/blacklist.d /run/awg-dns /var/lib/awg-dns /var/lib/awg-dns-public \
-      /etc/awg-dns/blocklists.d /etc/awg-dns/allowlist.d /etc/awg-dns/records.d /etc/awg-dns/vpn.d \
+      /etc/awg-dns/blocklists.d /etc/awg-dns/allowlist.d /etc/awg-dns/records.d /etc/awg-dns/vpn.d /etc/awg-dns/forward.d \
  && chown unbound:unbound /var/log/unbound /run/awg-dns /var/lib/awg-dns /var/lib/awg-dns-public \
  && setcap cap_net_bind_service=+ep /usr/sbin/unbound
 
 COPY unbound.conf /etc/unbound/unbound.conf
 COPY entrypoint-dns.sh /usr/local/bin/entrypoint-dns.sh
 COPY awg-dns-list /usr/local/bin/awg-dns-list
+COPY --from=chain /src/target/release/awg-dns-chain /usr/local/bin/awg-dns-chain
 RUN chmod +x /usr/local/bin/entrypoint-dns.sh /usr/local/bin/awg-dns-list
 
 # The tunnel containers stay root by necessity — building an interface and

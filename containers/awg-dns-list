@@ -2,7 +2,8 @@
 # The resolver's managed lists and its state, for `awg-tool dns` and for an
 # operator at the container's shell.
 #
-#   awg-dns-list status                  mode, counts, the managed lists, stats
+#   awg-dns-list status                  mode, counts, the managed lists,
+#                                        forwarded zones, the chain, stats
 #   awg-dns-list add  block|allow NAME   put a name on a list
 #   awg-dns-list rm   block|allow NAME   take it off
 #   awg-dns-list query NAME              what this resolver answers for NAME
@@ -32,11 +33,13 @@ list_file() {
 case "${1:-}" in
     status)
         g="$RUN/generated.conf"
-        if grep -q '^forward-zone:' "$g" 2>/dev/null; then echo mode=forward; else echo mode=recursive; fi
+        echo "mode=$(cat "$RUN/mode" 2>/dev/null || echo unknown)"
         echo "blocked=$(grep -c always_nxdomain "$g" 2>/dev/null || true)"
         echo "allowed=$(cat "$RUN/allowed.txt" 2>/dev/null | wc -l | tr -d ' ')"
         sed 's/^/block:/' "$MANAGED/block.txt" 2>/dev/null || true
         sed 's/^/allow:/' "$MANAGED/allow.txt" 2>/dev/null || true
+        sed 's/^/zone:/' "$RUN/zones.txt" 2>/dev/null || true
+        sed 's/^/chain:/' "$RUN/chain.stats" 2>/dev/null || true
         sed 's/^/stat:/' "$RUN/stats" 2>/dev/null || true
         ;;
     add|rm)

@@ -46,6 +46,9 @@ BY2=awg-dnstest-bystander-bridge
 RESOLVER=172.29.172.254
 # The slot unbound.conf answers amiunder.vpn with.
 STATUS_IP=172.29.172.253
+# A second resolver for the chain to fall back on, standing in for OpenNIC.
+ALT=awg-dnstest-alt
+ALT_IP=172.29.172.249
 QUERY=${AWG_DNS_QUERY:-example.com}
 WORK=
 AWG_TOOL=${AWG_TOOL:-$(dirname "$0")/../target/debug/awg-tool}
@@ -54,7 +57,7 @@ FAIL=0
 hr()    { printf '\n===== %s =====\n' "$*"; }
 check() { if [ "$1" = 0 ]; then echo "  PASS  $2"; else echo "  FAIL  $2"; FAIL=1; fi; }
 cleanup() {
-    docker rm -f "$SRV" "$CLI" "$DNS" "$STATUS" "$BY1" "$BY2" >/dev/null 2>&1
+    docker rm -f "$SRV" "$CLI" "$DNS" "$STATUS" "$BY1" "$BY2" "$ALT" >/dev/null 2>&1
     docker network rm "$NET" "$DNSNET" >/dev/null 2>&1
     docker volume rm "$NAMESVOL" "$STATEVOL" "$PUBVOL" >/dev/null 2>&1
     if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
@@ -355,6 +358,47 @@ got=$(docker exec "$CLI" sh -c "curl -fsS --max-time 15 http://$STATUS_IP/mtu/10
 [ "$got" = 1048576 ]; check $? "mtu.vpn's largest file arrives whole through the tunnel"
 grep -q 'leak.vpn' <<< "$(page "http://$STATUS_IP/app.js")"; check $? "the page script knows every name it answers to"
 
+# DIRECTION 9: the chain and forwarded zones, switched on, reordered and off
+# again while the resolver runs. The second resolver knows site.geek and
+# other.geek (a root of its own), says 0.0.0.0 for iana.org (a filter), and
+# cannot resolve anything else (its only upstream is nowhere).
+hr "DIRECTION 9: the resolver chain and forwarded zones"
+mkdir -p "$WORK/alt/records.d" "$WORK/dns/forward.d"
+printf 'site.geek A 192.0.2.77\nother.geek A 192.0.2.78\niana.org A 0.0.0.0\nx.zone.test A 192.0.2.79\n' \
+    > "$WORK/alt/records.d/test.records"
+chmod -R a+rX "$WORK/alt" "$WORK/dns"
+docker run -d --name "$ALT" --network "$DNSNET" --ip "$ALT_IP" --read-only \
+    --tmpfs /var/log/unbound --tmpfs /run/awg-dns:uid=100,gid=101 \
+    -e AWG_DNS_MODE=forward -e AWG_DNS_FORWARD='192.0.2.1@853#nowhere.invalid' -e AWG_DNS_CANARY=none \
+    -v "$WORK/alt:/etc/awg-dns:ro" "$DNSIMG" >/dev/null || exit 1
+within 20 'docker exec "$ALT" nslookup health.awg.internal 127.0.0.1 >/dev/null 2>&1'
+check $? "a read-only resolver without the public volume still starts and answers"
+printf '%s\ndefault\n' "$ALT_IP" > "$WORK/dns/chain.conf"
+printf 'zone.test. %s\n' "$ALT_IP" > "$WORK/dns/forward.d/test.conf"
+chmod a+r "$WORK/dns/chain.conf" "$WORK/dns/forward.d/test.conf"
+within 40 'grep -q "192.0.2.77" <<< "$(ask site.geek)"'
+check $? "the chain answers a name from another root (site.geek), switched on without a restart"
+docker exec "$DNS" pgrep -f awg-dns-chain >/dev/null; check $? "...and awg-dns-chain runs in the resolver"
+out_sink=$(ask iana.org)
+echo "$out_sink" | tail -2
+grep -qE '^Address: [0-9]' <<< "$out_sink" && ! grep -q '0\.0\.0\.0' <<< "$out_sink"
+check $? "an answer of 0.0.0.0 is passed over and the next resolver answers (iana.org)"
+grep -qE '^Address: [0-9]' <<< "$(ask www.iana.org)"
+check $? "a name the first resolver cannot answer comes from the next one"
+grep -q "192.0.2.79" <<< "$(ask x.zone.test)"
+check $? "a forwarded zone goes to the resolver named for it (zone.test)"
+printf 'default\n%s\n' "$ALT_IP" > "$WORK/dns/chain.conf"
+within 40 'grep -q "192.0.2.78" <<< "$(ask other.geek)"'
+check $? "with default first, a TLD the real root does not have is asked further down"
+within 30 'grep -q "^chain.upstreams=2" <<< "$(page "http://$STATUS_IP/state/dns.txt")"'
+check $? "dns.vpn counts the chain"
+grep -q '172.29.172.249\|127.0.0.1' <<< "$(page "http://$STATUS_IP/state/dns.txt")"; [ $? != 0 ]
+check $? "...and does not show its addresses"
+rm -f "$WORK/dns/chain.conf"
+within 40 '! docker exec "$DNS" pgrep -f awg-dns-chain >/dev/null'
+check $? "taking chain.conf away stops the chain"
+within 20 'grep -qE "^Address: [0-9]" <<< "$(ask www.wikipedia.org)"'
+check $? "...and the resolver answers on its own again"
 # awg-watch on the server: the loop the entrypoint started is there, and a
 # quick one with a five-second threshold sees the client go quiet, come back
 # when its tunnel restarts, and go quiet again.
