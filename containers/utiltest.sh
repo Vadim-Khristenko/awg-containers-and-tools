@@ -31,7 +31,9 @@ check() { if [ "$1" = 0 ]; then echo "  PASS  $2"; else echo "  FAIL  $2"; FAIL=
 cleanup() { docker rm -f "$NODE" "$PAGE_C" >/dev/null 2>&1; docker network rm "$UNET" >/dev/null 2>&1; }
 trap cleanup EXIT
 cleanup
-docker network create "$UNET" >/dev/null || exit 1
+# IPv4 only, even where the daemon hands every new network IPv6 too: the
+# address checks below are about the IPv4 one.
+docker network create --ipv6=false "$UNET" >/dev/null || exit 1
 
 hr "a node with no tunnel says so"
 docker run -d --name "$NODE" --network "$UNET" --cap-add NET_ADMIN --sysctl net.ipv6.conf.all.disable_ipv6=0 --entrypoint sleep "$IMG" 600 >/dev/null || exit 1

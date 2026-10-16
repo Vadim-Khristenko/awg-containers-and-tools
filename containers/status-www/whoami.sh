@@ -20,5 +20,8 @@ addr=${REMOTE_ADDR:-unknown}
 prefix='[::ffff:'
 case "$addr" in
     "$prefix"*) addr=${addr#"$prefix"}; addr=${addr%\]} ;;
+    # A visitor that really came over IPv6: the address, without the
+    # brackets the socket wraps it in.
+    \[*\]) addr=${addr#\[}; addr=${addr%\]} ;;
 esac
 printf '%s\n' "$addr"
