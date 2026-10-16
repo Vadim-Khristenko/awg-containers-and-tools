@@ -1,5 +1,5 @@
-//! The Servers screen: saved connections, what is running on the one you pick,
-//! and why it is unhappy.
+//! The Servers screen: saved connections and this machine's own docker, what is
+//! running on the one you pick, why it is unhappy, and its peers and resolver.
 //!
 //! Every question here is answered by `awg_core::docker`, the same code the
 //! `status`, `doctor` and `logs` commands call. Two implementations of "is this
@@ -11,6 +11,8 @@
 //! session to cross threads and would buy responsiveness in a screen whose only
 //! job is to wait for a server anyway.
 
+use awg_core::docker::dns::{self as dnsctl, List as DnsList};
+use awg_core::docker::image::Generation;
 use awg_core::docker::{self, Container, Host};
 use awg_core::profile::{self, Profile};
 use awg_core::ssh::{self, Session};
@@ -26,6 +28,46 @@ use crate::theme;
 enum Pane {
     Profiles,
     Containers,
+}
+
+/// What a line of typing is for. The name typed is the confirmation too: a
+/// peer is revoked only by naming it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Ask {
+    Block,
+    Unblock,
+    Allow,
+    Unallow,
+    Query,
+    PeerAdd,
+    PeerRm,
+}
+
+impl Ask {
+    fn prompt(self, lang: Lang) -> &'static str {
+        t(
+            lang,
+            match self {
+                Ask::Block => K::AskBlock,
+                Ask::Unblock => K::AskUnblock,
+                Ask::Allow => K::AskAllow,
+                Ask::Unallow => K::AskUnallow,
+                Ask::Query => K::AskQuery,
+                Ask::PeerAdd => K::AskPeerAdd,
+                Ask::PeerRm => K::AskPeerRm,
+            },
+        )
+    }
+
+    /// Names, labels and public keys: nothing else is ever typed here.
+    fn accepts(self, c: char) -> bool {
+        c.is_ascii_alphanumeric()
+            || match self {
+                Ask::PeerRm => "._-+/=".contains(c),
+                Ask::PeerAdd => "._-".contains(c),
+                _ => ".-_*".contains(c),
+            }
+    }
 }
 
 /// Not `Debug`, for the same reason `crate::remote::Target` is not: it can hold
@@ -46,6 +88,11 @@ pub struct Servers {
     detail_title: String,
     detail: Vec<Line<'static>>,
     message: Option<(String, bool)>,
+    /// Docker answers on this machine, so it is offered as the first row.
+    local_row: bool,
+    /// Connected to this machine's docker rather than over SSH.
+    local: bool,
+    input: Option<(Ask, String)>,
 }
 
 impl Servers {
@@ -64,6 +111,9 @@ impl Servers {
             detail_title: String::new(),
             detail: Vec::new(),
             message: None,
+            local_row: false,
+            local: false,
+            input: None,
         }
     }
 
@@ -71,10 +121,11 @@ impl Servers {
     /// start-up, so a tool that is only ever used to generate configs never
     /// touches the config directory at all.
     pub fn open(&mut self, lang: Lang) {
+        self.local_row = docker::docker_available();
         match profile::default_config_dir().and_then(|d| profile::load_all(&d)) {
             Ok(p) => {
                 self.profiles = p;
-                if self.profiles.is_empty() {
+                if self.profiles.is_empty() && !self.local_row {
                     self.message = Some((t(lang, K::MsgNoSavedProfiles).into(), false));
                 }
             }
@@ -83,13 +134,37 @@ impl Servers {
     }
 
     fn host(&self) -> Option<Host<'_>> {
+        if self.local {
+            return Some(Host::local());
+        }
         self.session
             .as_ref()
             .map(|s| Host::new(s, self.sudo_password.as_deref()).with_docker_sudo(self.sudo))
     }
 
+    /// Rows in the connections pane: this machine first when it has docker.
+    fn rows(&self) -> usize {
+        self.profiles.len() + usize::from(self.local_row)
+    }
+
+    /// Whether a line is being typed: then every key is input.
+    pub fn typing(&self) -> bool {
+        self.input.is_some()
+    }
+
     fn connect(&mut self, lang: Lang) {
-        let Some(p) = self.profiles.get(self.profile_idx).cloned() else {
+        if self.local_row && self.profile_idx == 0 {
+            self.session = None;
+            self.sudo_password = None;
+            self.local = true;
+            self.connected_to = None;
+            self.message = None;
+            self.pane = Pane::Containers;
+            self.refresh(lang);
+            return;
+        }
+        let at = self.profile_idx - usize::from(self.local_row);
+        let Some(p) = self.profiles.get(at).cloned() else {
             return;
         };
         self.message = None;
@@ -123,6 +198,7 @@ impl Servers {
 
         match ssh::connect(&p, secret.as_deref()) {
             Ok(s) => {
+                self.local = false;
                 self.sudo = p.sudo_required;
                 self.connected_to = Some(p.name.clone());
                 self.session = Some(s);
@@ -140,7 +216,12 @@ impl Servers {
 
     fn refresh(&mut self, lang: Lang) {
         let Some(host) = self.host() else { return };
-        match docker::find_awg_containers(&host) {
+        let found = if self.local {
+            docker::find_local_containers()
+        } else {
+            docker::find_awg_containers(&host)
+        };
+        match found {
             Ok(found) => {
                 self.summaries = found.iter().map(|c| summarise(&host, c, lang)).collect();
                 self.containers = found;
@@ -232,13 +313,337 @@ impl Servers {
         self.detail = lines;
     }
 
+    fn selected(&self) -> Option<&Container> {
+        self.containers.get(self.container_idx)
+    }
+
+    /// The running resolver: the selected container when it is one, else the
+    /// first running one on this host.
+    fn resolver(&self) -> Option<String> {
+        let is = |c: &&Container| c.generation == Some(Generation::Dns);
+        self.selected()
+            .filter(is)
+            .or_else(|| {
+                self.containers
+                    .iter()
+                    .filter(is)
+                    .find(|c| c.state.is_running())
+            })
+            .map(|c| c.name.clone())
+    }
+
+    /// The node peers belong to: the selected container when it is one, else
+    /// the first running node.
+    fn node(&self) -> Option<String> {
+        let is = |c: &&Container| c.generation.and_then(|g| g.awg()).is_some();
+        self.selected()
+            .filter(is)
+            .or_else(|| {
+                self.containers
+                    .iter()
+                    .filter(is)
+                    .find(|c| c.state.is_running())
+            })
+            .map(|c| c.name.clone())
+    }
+
+    fn show(&mut self, title: String, lines: Vec<Line<'static>>) {
+        self.detail_title = title;
+        self.detail = lines;
+    }
+
+    fn dns_lines(&self, host: &Host, name: &str, lang: Lang) -> Vec<Line<'static>> {
+        let s = match dnsctl::status(host, name) {
+            Ok(s) => s,
+            Err(e) => return vec![Line::from(Span::styled(e.to_string(), theme::error()))],
+        };
+        let mut out = vec![
+            Line::from(Span::styled(
+                format!("● {name}  ({} {})", t(lang, K::LblMode), s.mode),
+                theme::ok(),
+            )),
+            Line::from(Span::styled(
+                format!(
+                    "  {} {}   {} {}",
+                    t(lang, K::LblBlocked),
+                    s.blocked,
+                    t(lang, K::LblAllowed),
+                    s.allowed
+                ),
+                theme::base(),
+            )),
+        ];
+        if let Some(q) = s.stat("total.num.queries") {
+            let hits = s.stat("total.num.cachehits").unwrap_or(0);
+            let share = (hits * 100).checked_div(q).unwrap_or(0);
+            out.push(Line::from(Span::styled(
+                format!(
+                    "  {} {q}, {} {share}%",
+                    t(lang, K::LblQueries),
+                    t(lang, K::LblCacheHits)
+                ),
+                theme::dim(),
+            )));
+        }
+        for (label, names) in [("block", &s.managed_block), ("allow", &s.managed_allow)] {
+            if names.is_empty() {
+                continue;
+            }
+            out.push(Line::from(""));
+            out.push(Line::from(Span::styled(format!("{label}:"), theme::base())));
+            for n in names {
+                out.push(Line::from(Span::styled(format!("  {n}"), theme::dim())));
+            }
+        }
+        out
+    }
+
+    fn dns(&mut self, lang: Lang, note: Option<Line<'static>>) {
+        let Some(host) = self.host() else { return };
+        let Some(name) = self.resolver() else {
+            self.message = Some((t(lang, K::MsgNoResolver).into(), true));
+            self.detail.clear();
+            return;
+        };
+        let mut lines: Vec<Line<'static>> = note.into_iter().collect();
+        lines.extend(self.dns_lines(&host, &name, lang));
+        self.show(format!("DNS — {name}"), lines);
+    }
+
+    fn peer_lines(&self, host: &Host, node: &str, lang: Lang) -> Vec<Line<'static>> {
+        match docker::peers::list(host, node) {
+            Ok(rows) if rows.is_empty() => {
+                vec![Line::from(Span::styled(
+                    t(lang, K::MsgNoPeers),
+                    theme::dim(),
+                ))]
+            }
+            Ok(rows) => rows
+                .into_iter()
+                .map(|r| {
+                    let key: String = r.public_key.chars().take(10).collect();
+                    Line::from(vec![
+                        Span::styled(format!("{:<16}", r.label), theme::base()),
+                        Span::styled(format!(" {:<18}", r.allowed_ips), theme::dim()),
+                        Span::styled(format!(" {key}… "), theme::faint()),
+                        Span::styled(r.last_handshake, theme::dim()),
+                    ])
+                })
+                .collect(),
+            Err(e) => vec![Line::from(Span::styled(e.to_string(), theme::error()))],
+        }
+    }
+
+    fn peers(&mut self, lang: Lang, note: Option<Line<'static>>) {
+        let Some(host) = self.host() else { return };
+        let Some(node) = self.node() else {
+            self.message = Some((t(lang, K::MsgNoContainers).into(), true));
+            self.detail.clear();
+            return;
+        };
+        let mut lines: Vec<Line<'static>> = note.into_iter().collect();
+        lines.extend(self.peer_lines(&host, &node, lang));
+        self.show(format!("{} — {node}", t(lang, K::MenuPeers)), lines);
+    }
+
+    /// Issue a peer: the config is shown and written next to the saved
+    /// connections, since copying a private key off a terminal screen is how
+    /// it ends up in a scrollback buffer somewhere.
+    fn add_peer(&mut self, label: &str, lang: Lang) {
+        let Some(host) = self.host() else { return };
+        let Some(node) = self.node() else { return };
+        let conf = match docker::peers::add(&host, &node, label, None) {
+            Ok(c) => c,
+            Err(e) => {
+                let line = Line::from(Span::styled(e.to_string(), theme::error()));
+                return self.peers(lang, Some(line));
+            }
+        };
+        let saved = profile::default_config_dir()
+            .map(|d| d.join("issued"))
+            .map_err(|e| e.to_string())
+            .and_then(|dir| {
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let path = dir.join(format!("{node}-{label}.conf"));
+                crate::ops::write_private(&path.to_string_lossy(), &conf)
+                    .map_err(|e| e.to_string())?;
+                Ok(path)
+            });
+        let mut lines = vec![match &saved {
+            Ok(p) => Line::from(Span::styled(
+                format!("✓ {label}: {} {}", t(lang, K::MsgWrote), p.display()),
+                theme::ok(),
+            )),
+            Err(e) => Line::from(Span::styled(format!("! {e}"), theme::warn())),
+        }];
+        lines.push(Line::from(Span::styled(
+            t(lang, K::MsgPeerPrivate),
+            theme::warn(),
+        )));
+        lines.push(Line::from(""));
+        lines.extend(
+            conf.lines()
+                .map(|l| Line::from(Span::styled(l.to_string(), theme::base()))),
+        );
+        if let Ok(link) = awg_core::vpn::conf_to_vpn(&conf) {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(link, theme::dim())));
+        }
+        self.show(format!("{} — {node}", t(lang, K::MenuPeers)), lines);
+    }
+
+    fn run_ask(&mut self, ask: Ask, text: &str, lang: Lang) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let note = |r: awg_core::Result<String>| match r {
+            Ok(msg) => Line::from(Span::styled(
+                format!("✓ {msg} · {}", t(lang, K::MsgDnsReloads)),
+                theme::ok(),
+            )),
+            Err(e) => Line::from(Span::styled(e.to_string(), theme::error())),
+        };
+        match ask {
+            Ask::PeerAdd => self.add_peer(text, lang),
+            Ask::PeerRm => {
+                let (Some(host), Some(node)) = (self.host(), self.node()) else {
+                    return;
+                };
+                let line = match docker::peers::remove(&host, &node, text) {
+                    Ok(msg) => Line::from(Span::styled(format!("✓ {msg}"), theme::ok())),
+                    Err(e) => Line::from(Span::styled(e.to_string(), theme::error())),
+                };
+                self.peers(lang, Some(line));
+            }
+            Ask::Query => {
+                let (Some(host), Some(name)) = (self.host(), self.resolver()) else {
+                    return;
+                };
+                let mut lines = vec![Line::from(Span::styled(format!("? {text}"), theme::base()))];
+                match dnsctl::query(&host, &name, text) {
+                    Ok(a) if a.is_empty() => lines.push(Line::from(Span::styled(
+                        format!("  {}", t(lang, K::MsgNoAnswer)),
+                        theme::warn(),
+                    ))),
+                    Ok(a) => lines.extend(
+                        a.into_iter()
+                            .map(|l| Line::from(Span::styled(format!("  {l}"), theme::ok()))),
+                    ),
+                    Err(e) => lines.push(Line::from(Span::styled(e.to_string(), theme::error()))),
+                }
+                self.show(format!("DNS — {name}"), lines);
+            }
+            _ => {
+                let (Some(host), Some(name)) = (self.host(), self.resolver()) else {
+                    return;
+                };
+                let (list, add) = match ask {
+                    Ask::Block => (DnsList::Block, true),
+                    Ask::Unblock => (DnsList::Block, false),
+                    Ask::Allow => (DnsList::Allow, true),
+                    _ => (DnsList::Allow, false),
+                };
+                let line = note(dnsctl::edit(&host, &name, list, text, add));
+                self.dns(lang, Some(line));
+            }
+        }
+    }
+
+    /// The keys the footer should offer for what is selected now.
+    pub fn hints(&self, lang: Lang) -> Vec<(&'static str, &'static str)> {
+        if let Some((_, _)) = &self.input {
+            return vec![
+                ("↵", t(lang, K::HintConfirm)),
+                ("Esc", t(lang, K::HintCancel)),
+            ];
+        }
+        let mut h = vec![
+            ("↑↓", t(lang, K::HintMove)),
+            ("Tab", t(lang, K::HintSwitchPane)),
+        ];
+        if self.pane == Pane::Profiles || self.containers.is_empty() {
+            h.push(("↵", t(lang, K::HintConnect)));
+            return h;
+        }
+        let on_resolver = self
+            .selected()
+            .is_some_and(|c| c.generation == Some(Generation::Dns));
+        if on_resolver {
+            h.extend([
+                ("b/B", t(lang, K::HintBlock)),
+                ("a/A", t(lang, K::HintAllow)),
+                ("/", t(lang, K::HintQuery)),
+            ]);
+        } else {
+            h.extend([
+                ("d", t(lang, K::MenuDoctor)),
+                ("p", t(lang, K::MenuPeers)),
+                ("+/-", t(lang, K::HintPeerAddRm)),
+                ("n", "DNS"),
+            ]);
+        }
+        h.extend([("L", t(lang, K::MenuLogs)), ("r", t(lang, K::HintRefresh))]);
+        h
+    }
     /// Returns true when the key was consumed, so the caller can fall through
     /// to its own navigation when it was not.
     pub fn on_key(&mut self, code: KeyCode, lang: Lang) -> bool {
+        if let Some((ask, mut text)) = self.input.take() {
+            match code {
+                KeyCode::Esc => {}
+                KeyCode::Enter => self.run_ask(ask, &text, lang),
+                KeyCode::Backspace => {
+                    text.pop();
+                    self.input = Some((ask, text));
+                }
+                KeyCode::Char(c) if ask.accepts(c) => {
+                    text.push(c);
+                    self.input = Some((ask, text));
+                }
+                _ => self.input = Some((ask, text)),
+            }
+            return true;
+        }
         let len = match self.pane {
-            Pane::Profiles => self.profiles.len(),
+            Pane::Profiles => self.rows(),
             Pane::Containers => self.containers.len(),
         };
+        let connected = self.host().is_some() && !self.containers.is_empty();
+        let ask = match code {
+            KeyCode::Char('b') => Some(Ask::Block),
+            KeyCode::Char('B') => Some(Ask::Unblock),
+            KeyCode::Char('a') => Some(Ask::Allow),
+            KeyCode::Char('A') => Some(Ask::Unallow),
+            KeyCode::Char('/') => Some(Ask::Query),
+            KeyCode::Char('+') => Some(Ask::PeerAdd),
+            KeyCode::Char('-') => Some(Ask::PeerRm),
+            _ => None,
+        };
+        if let Some(ask) = ask.filter(|_| connected) {
+            self.input = Some((ask, String::new()));
+            return true;
+        }
+        match code {
+            KeyCode::Char('n') if connected => {
+                self.dns(lang, None);
+                return true;
+            }
+            KeyCode::Char('p') if connected => {
+                self.peers(lang, None);
+                return true;
+            }
+            KeyCode::Enter
+                if self.pane == Pane::Containers
+                    && self
+                        .selected()
+                        .is_some_and(|c| c.generation == Some(Generation::Dns)) =>
+            {
+                self.dns(lang, None);
+                return true;
+            }
+            _ => {}
+        }
         match code {
             KeyCode::Tab => {
                 self.pane = match self.pane {
@@ -300,17 +705,31 @@ impl Servers {
             .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
             .split(cols[0]);
 
-        let items: Vec<ListItem> = self
-            .profiles
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let live = self.connected_to.as_deref() == Some(p.name.as_str());
+        let shift = usize::from(self.local_row);
+        let pick = |i: usize| i == self.profile_idx && self.pane == Pane::Profiles;
+        let mut items: Vec<ListItem> = Vec::new();
+        if self.local_row {
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(if self.local { "● " } else { "  " }, theme::ok()),
+                Span::styled(
+                    t(lang, K::LblThisMachine).to_string(),
+                    if pick(0) {
+                        theme::selected()
+                    } else {
+                        theme::base()
+                    },
+                ),
+            ])));
+        }
+        items.extend(self.profiles.iter().enumerate().map(|(i, p)| {
+            let i = i + shift;
+            {
+                let live = !self.local && self.connected_to.as_deref() == Some(p.name.as_str());
                 ListItem::new(Line::from(vec![
                     Span::styled(if live { "● " } else { "  " }, theme::ok()),
                     Span::styled(
                         format!("{:<16}", p.name),
-                        if i == self.profile_idx && self.pane == Pane::Profiles {
+                        if pick(i) {
                             theme::selected()
                         } else {
                             theme::base()
@@ -318,8 +737,8 @@ impl Servers {
                     ),
                     Span::styled(format!(" {}@{}", p.user, p.host), theme::faint()),
                 ]))
-            })
-            .collect();
+            }
+        }));
         f.render_widget(
             List::new(items).block(super::panel(
                 t(lang, K::PanelProfiles),
@@ -376,16 +795,36 @@ impl Servers {
         } else {
             self.detail.clone()
         };
-        let s = super::clamp_scroll(scroll, &body, cols[1]);
+        // A line being typed gets a pane of its own above the details, so
+        // what it will act on stays in view while it is typed.
+        let right = match &self.input {
+            Some((ask, text)) => {
+                let split = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(3), Constraint::Min(3)])
+                    .split(cols[1]);
+                f.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled(text.clone(), theme::base()),
+                        Span::styled("█", theme::ok()),
+                    ]))
+                    .block(super::panel(ask.prompt(lang), true)),
+                    split[0],
+                );
+                split[1]
+            }
+            None => cols[1],
+        };
+        let s = super::clamp_scroll(scroll, &body, right);
         f.render_widget(
             Paragraph::new(body.clone())
                 .wrap(Wrap { trim: false })
                 .scroll((s, 0))
                 .block(super::panel(
-                    &format!("{title}{}", super::scroll_marker(s, &body, cols[1])),
+                    &format!("{title}{}", super::scroll_marker(s, &body, right)),
                     false,
                 )),
-            cols[1],
+            right,
         );
     }
 }
@@ -419,5 +858,141 @@ fn summarise(host: &Host, c: &Container, lang: Lang) -> String {
 impl Default for Servers {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn typed(s: &mut Servers, keys: &str) {
+        for c in keys.chars() {
+            assert!(s.on_key(KeyCode::Char(c), Lang::En));
+        }
+    }
+
+    #[test]
+    fn nothing_starts_typing_before_there_is_something_to_act_on() {
+        let mut s = Servers::new();
+        for c in ['b', 'a', '+', '-', '/'] {
+            s.on_key(KeyCode::Char(c), Lang::En);
+            assert!(!s.typing(), "{c} opened a prompt with nothing connected");
+        }
+    }
+
+    #[test]
+    fn a_prompt_takes_every_key_and_only_what_the_answer_can_hold() {
+        let mut s = Servers::new();
+        s.input = Some((Ask::Block, String::new()));
+        typed(&mut s, "ads.Example-1.com q");
+        assert_eq!(s.input.as_ref().unwrap().1, "ads.Example-1.comq");
+        assert!(s.on_key(KeyCode::Backspace, Lang::En));
+        assert_eq!(s.input.as_ref().unwrap().1, "ads.Example-1.com");
+        assert!(s.on_key(KeyCode::Esc, Lang::En));
+        assert!(!s.typing(), "Esc gives up");
+
+        s.input = Some((Ask::PeerRm, String::new()));
+        typed(&mut s, "Ab+/9=");
+        assert_eq!(
+            s.input.as_ref().unwrap().1,
+            "Ab+/9=",
+            "a public key is typeable"
+        );
+        s.input = Some((Ask::PeerAdd, String::new()));
+        typed(&mut s, "my phone/");
+        assert_eq!(s.input.as_ref().unwrap().1, "myphone");
+    }
+
+    #[test]
+    fn this_machine_is_the_first_row_when_docker_answers() {
+        let mut s = Servers::new();
+        s.local_row = true;
+        assert_eq!(s.rows(), 1);
+        s.on_key(KeyCode::Down, Lang::En);
+        assert_eq!(s.profile_idx, 0, "one row wraps onto itself");
+        assert!(s.host().is_none(), "nothing is connected before Enter");
+    }
+
+    #[test]
+    fn the_footer_offers_what_the_selection_can_do() {
+        let mut s = Servers::new();
+        let keys = |s: &Servers| s.hints(Lang::En).iter().map(|h| h.0).collect::<Vec<_>>();
+        assert!(keys(&s).contains(&"↵"));
+        s.input = Some((Ask::Query, String::new()));
+        assert_eq!(keys(&s), ["↵", "Esc"]);
+    }
+
+    /// Against this machine's docker with a node and a resolver running, for
+    /// example `AWG_TEST_HOLD=300 containers/dnstest.sh 3.1`:
+    /// `cargo test -p awg-cli live_local -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_local_node_and_resolver() {
+        let mut s = Servers::new();
+        s.open(Lang::En);
+        assert!(s.local_row, "docker does not answer here");
+        s.on_key(KeyCode::Enter, Lang::En);
+        assert!(!s.containers.is_empty(), "{:?}", s.message);
+        let dump = |s: &Servers| {
+            println!("--- {}", s.detail_title);
+            for l in &s.detail {
+                println!("{l}");
+            }
+            s.detail
+                .iter()
+                .map(|l| l.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        s.on_key(KeyCode::Char('n'), Lang::En);
+        assert!(dump(&s).contains("mode"), "dns status");
+        s.on_key(KeyCode::Char('b'), Lang::En);
+        typed(&mut s, "tui-test.example");
+        s.on_key(KeyCode::Enter, Lang::En);
+        assert!(dump(&s).contains("tui-test.example"), "blocked name listed");
+        s.on_key(KeyCode::Char('B'), Lang::En);
+        typed(&mut s, "tui-test.example");
+        s.on_key(KeyCode::Enter, Lang::En);
+        assert!(!dump(&s).contains("  tui-test.example"), "unblocked");
+        s.on_key(KeyCode::Char('/'), Lang::En);
+        typed(&mut s, "amiunder.vpn");
+        s.on_key(KeyCode::Enter, Lang::En);
+        assert!(dump(&s).contains("172.29.172.253"), "query answered");
+
+        // The node with a tunnel, not a bystander running the same image.
+        s.container_idx = s
+            .containers
+            .iter()
+            .position(|c| c.name.ends_with("server"))
+            .expect("a node named *server");
+        s.on_key(KeyCode::Char('+'), Lang::En);
+        typed(&mut s, "tuitest");
+        s.on_key(KeyCode::Enter, Lang::En);
+        let issued = dump(&s);
+        assert!(
+            issued.contains("[Interface]") && issued.contains("vpn://"),
+            "issued"
+        );
+        s.on_key(KeyCode::Char('p'), Lang::En);
+        assert!(dump(&s).contains("tuitest"), "listed");
+        s.on_key(KeyCode::Char('-'), Lang::En);
+        typed(&mut s, "tuitest");
+        s.on_key(KeyCode::Enter, Lang::En);
+        let after = dump(&s);
+        assert!(after.starts_with("✓ removed tuitest"), "revoked");
+        assert!(
+            !after.lines().skip(1).any(|l| l.starts_with("tuitest")),
+            "still listed"
+        );
+        // The issued config holds a private key; this test leaves none behind.
+        let issued = profile::default_config_dir()
+            .unwrap()
+            .join("issued")
+            .join(format!(
+                "{}-tuitest.conf",
+                s.containers[s.container_idx].name
+            ));
+        std::fs::remove_file(issued).unwrap();
     }
 }

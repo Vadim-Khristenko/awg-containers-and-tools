@@ -564,6 +564,12 @@ impl App {
             }
             return;
         }
+        // A line typed on the servers screen is input to the end, like the
+        // check screen's.
+        if self.screen() == Screen::Servers && self.servers.typing() {
+            self.servers.on_key(code, self.lang);
+            return;
+        }
         // Back and quit mean the same thing on every other screen.
         match code {
             KeyCode::Char('q') | KeyCode::Char('Q') => {
@@ -1255,12 +1261,9 @@ fn footer(app: &App, f: &mut ratatui::Frame, area: Rect) {
             spans.extend(key_hint("PgUp/PgDn", t(app.lang, K::HintScroll)));
         }
         Screen::Servers => {
-            spans.extend(key_hint("↑↓", t(app.lang, K::HintMove)));
-            spans.extend(key_hint("Tab", t(app.lang, K::HintSwitchPane)));
-            spans.extend(key_hint("↵", t(app.lang, K::HintConnect)));
-            spans.extend(key_hint("d", t(app.lang, K::MenuDoctor)));
-            spans.extend(key_hint("L", t(app.lang, K::MenuLogs)));
-            spans.extend(key_hint("r", t(app.lang, K::HintRefresh)));
+            for (key, label) in app.servers.hints(app.lang) {
+                spans.extend(key_hint(key, label));
+            }
         }
         _ => {
             spans.extend(key_hint("↑↓", t(app.lang, K::HintScroll)));

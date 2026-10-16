@@ -746,7 +746,7 @@ pub fn cmd_dns(args: &[String], lang: Lang) {
 }
 
 /// A client config holds its private key: readable by its owner only.
-fn write_private(path: &str, text: &str) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &str, text: &str) -> std::io::Result<()> {
     std::fs::write(path, text)?;
     #[cfg(unix)]
     {
