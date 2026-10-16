@@ -4,20 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
-<title>amiunder.vpn — вы под VPN?</title>
+<title>amiunder.vpn</title>
 <link rel="stylesheet" href="architect.css">
 <!--
-  Served from inside the tunnel only. The name resolves through the tunnel's
-  own resolver and the address is reachable only through the tunnel, so the
-  page loading at all IS the answer. Everything on it is computed locally or
-  fetched from this same host: no external requests, no third-party speed
-  test, no analytics, no font CDNs — a page whose whole point is privacy does
-  not leak to render itself.
--->
-<!--
-  The theme comes from architect.css — the kit itself, not an approximation.
-  What is left here is only this page's layout: one card, centred, and the
-  few arrangements the kit has no opinion about.
+  Served from inside the tunnel only. Every name this page answers to
+  (amiunder, dns, speed, mtu, node and any <nonce>.leak.vpn) resolves through
+  the tunnel's own resolver and the address is reachable only through the
+  tunnel, so the page loading at all is the first answer. Everything on it is
+  computed locally or fetched from this same host: no external requests, no
+  third-party speed test, no analytics, no font CDNs. A page whose whole point
+  is privacy does not leak to render itself.
+
+  One page for all of them: app.js reads the name it was opened by and draws
+  that page. The theme comes from architect.css, the kit itself; what is left
+  here is only the layout the kit has no opinion about.
 -->
 <style>
     body {
@@ -30,7 +30,7 @@
     }
     .status-card {
         width: 100%;
-        max-width: 520px;
+        max-width: 560px;
         padding: var(--sp-6) var(--sp-5);
         text-align: center;
     }
@@ -38,17 +38,20 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: var(--sp-5);
+        gap: var(--sp-3);
+        margin-bottom: var(--sp-4);
     }
     .status-brand {
         font-size: 0.72rem;
         letter-spacing: 0.14em;
         text-transform: uppercase;
         color: var(--ink-3);
+        text-align: left;
+        overflow-wrap: anywhere;
     }
     .status-brand b { color: var(--accent-ink); }
-    .lang { display: flex; gap: var(--sp-1); }
-    .lang button {
+    .lang { display: flex; gap: var(--sp-1); flex: none; }
+    .lang button, .pages a {
         border: var(--rule) solid var(--line);
         background: transparent;
         color: var(--ink-3);
@@ -58,23 +61,33 @@
         padding: 4px 10px;
         border-radius: var(--r-pill);
         cursor: pointer;
+        text-decoration: none;
     }
-    .lang button.on {
+    .lang button.on, .pages a.on {
         border-color: var(--accent);
         color: var(--accent-ink);
         background: rgb(var(--accent-rgb) / 0.12);
     }
+    .pages {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: var(--sp-1);
+        margin-bottom: var(--sp-5);
+    }
     .verdict {
-        font-size: 2.6rem;
+        font-size: 2.4rem;
         font-weight: 800;
         line-height: 1.1;
         margin-bottom: var(--sp-2);
         color: var(--counter);
+        overflow-wrap: anywhere;
     }
+    .verdict.bad { color: var(--ink); }
     .verdict-sub {
         color: var(--ink-3);
         font-size: var(--t-sm);
-        margin-bottom: var(--sp-6);
+        margin-bottom: var(--sp-5);
     }
     .rows {
         display: grid;
@@ -94,16 +107,43 @@
         font-size: var(--t-sm);
     }
     .row .k { color: var(--ink-3); }
-    .row .v { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .row .v {
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        overflow-wrap: anywhere;
+    }
     .row .v.pending { color: var(--ink-3); font-weight: 400; }
-    .speed-btn { width: 100%; height: 44px; }
+    .row .v.bad { color: var(--red); }
+    a.row { color: inherit; text-decoration: none; }
+    a.row:hover { border-color: var(--accent); }
+    .wide-btn { width: 100%; height: 44px; }
+    .ask { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+    .ask input {
+        flex: 1;
+        min-width: 0;
+        font: inherit;
+        font-size: var(--t-sm);
+        color: var(--ink);
+        background: var(--ground-3);
+        border: var(--rule) solid var(--line);
+        border-radius: var(--r-2);
+        padding: var(--sp-2) var(--sp-3);
+    }
+    .ask button { height: auto; }
+    .note {
+        text-align: left;
+        font-size: var(--t-sm);
+        color: var(--ink-2);
+        line-height: 1.5;
+        margin-bottom: var(--sp-4);
+    }
     .meter {
         height: 6px;
         background: var(--ground-3);
         border-radius: var(--r-pill);
         margin-top: var(--sp-3);
         overflow: hidden;
-        display: none;
     }
     .meter i {
         display: block;
@@ -124,30 +164,14 @@
 <body>
 <div class="card status-card">
     <div class="status-top">
-        <div class="status-brand">Any Tech <b>ARCHITECT</b> · amiunder.vpn</div>
+        <div class="status-brand">Any Tech <b>ARCHITECT</b> · <span id="host">amiunder.vpn</span></div>
         <div class="lang">
             <button id="lang-ru" type="button">RU</button>
             <button id="lang-en" type="button">EN</button>
         </div>
     </div>
-    <div class="verdict" id="verdict">—</div>
-    <div class="verdict-sub" id="verdict-sub"></div>
-    <div class="rows">
-        <div class="row">
-            <span class="k" id="k-ip"></span>
-            <span class="v pending" id="tunnel-ip">…</span>
-        </div>
-        <div class="row">
-            <span class="k" id="k-name"></span>
-            <span class="v">amiunder.vpn</span>
-        </div>
-        <div class="row">
-            <span class="k" id="k-speed"></span>
-            <span class="v pending" id="speed"></span>
-        </div>
-    </div>
-    <button class="btn btn--primary speed-btn" id="go" type="button"></button>
-    <div class="meter" id="meter"><i id="meter-fill"></i></div>
+    <nav class="pages" id="nav"></nav>
+    <main id="page"></main>
     <div class="status-foot" id="foot"></div>
 </div>
 <script src="app.js"></script>

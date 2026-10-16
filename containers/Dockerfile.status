@@ -1,4 +1,4 @@
-# The "am I under the VPN?" page — amiunder.vpn.
+# The tunnel's own pages: amiunder.vpn, and dns, speed, mtu, leak and node.vpn.
 #
 # The name exists only in the tunnel resolver (a local-data record in
 # unbound.conf), and the address answers only on the resolver network, which
@@ -29,17 +29,29 @@ LABEL org.opencontainers.image.title="amnezia-wg-status — the tunnel's own sta
 # is built without it. The payload is the only generated content: random
 # bytes, incompressible, so the measured number is the tunnel's throughput
 # and not gzip's.
+# The mtu.vpn files step from one packet's worth to many, so a path that loses
+# large packets shows up as the first size that never arrives.
+#
+# /var/www/state (the resolver's public counters) and /var/lib/awg-names (the
+# node's facts) are mounted, read only, and deliberately not created here:
+# docker copies an image directory's owner onto an empty volume, and this
+# page starting before the resolver has written anything would hand the
+# resolver's volume to root and lock it out of its own counters.
 RUN apk add --no-cache busybox-extras \
- && mkdir -p /var/www/cgi-bin \
+ && mkdir -p /var/www/cgi-bin /var/www/mtu \
  && dd if=/dev/urandom of=/var/www/speedtest.bin bs=1M count=8 2>/dev/null \
- && chmod 644 /var/www/speedtest.bin
+ && for k in 1 16 128 1024; do dd if=/dev/urandom of=/var/www/mtu/${k}k.bin bs=1024 count=$k 2>/dev/null; done \
+ && chmod 644 /var/www/speedtest.bin /var/www/mtu/*.bin
 
 COPY status-www/index.html   /var/www/index.html
 COPY status-www/architect.css /var/www/architect.css
 COPY status-www/app.js       /var/www/app.js
 COPY status-www/whoami.sh    /var/www/cgi-bin/whoami
+COPY status-www/lookup.sh    /var/www/cgi-bin/lookup
+COPY status-www/sink.sh      /var/www/cgi-bin/sink
+COPY status-www/node.sh      /var/www/cgi-bin/node
 COPY status-www/httpd.conf   /etc/httpd.conf
-RUN chmod +x /var/www/cgi-bin/whoami
+RUN chmod +x /var/www/cgi-bin/whoami /var/www/cgi-bin/lookup /var/www/cgi-bin/sink /var/www/cgi-bin/node
 
 EXPOSE 80
 # -f foreground, -p "do not fork a pidfile writer", -h the web root, -c the

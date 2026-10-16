@@ -39,6 +39,8 @@ STATUS=awg-dnstest-status
 NAMESVOL=awgdnstest-names
 # Where `awg-tool dns block|allow` writes, as awg-dns-state does in compose.
 STATEVOL=awgdnstest-dns-state
+# The resolver's public counters, read by the status page.
+PUBVOL=awgdnstest-dns-public
 BY1=awg-dnstest-bystander-net
 BY2=awg-dnstest-bystander-bridge
 RESOLVER=172.29.172.254
@@ -54,7 +56,7 @@ check() { if [ "$1" = 0 ]; then echo "  PASS  $2"; else echo "  FAIL  $2"; FAIL=
 cleanup() {
     docker rm -f "$SRV" "$CLI" "$DNS" "$STATUS" "$BY1" "$BY2" >/dev/null 2>&1
     docker network rm "$NET" "$DNSNET" >/dev/null 2>&1
-    docker volume rm "$NAMESVOL" "$STATEVOL" >/dev/null 2>&1
+    docker volume rm "$NAMESVOL" "$STATEVOL" "$PUBVOL" >/dev/null 2>&1
     if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
@@ -133,10 +135,12 @@ docker run -d --name "$DNS" --network "$DNSNET" --ip "$RESOLVER" \
     --read-only --tmpfs /var/log/unbound --tmpfs /run/awg-dns:uid=100,gid=101 \
     -v "$WORK/blocklist.txt:/etc/unbound/blacklist.d/test.txt:ro" \
     -v "$WORK/dns:/etc/awg-dns:ro" \
-    -v "$NAMESVOL:/var/lib/awg-names:ro" -v "$STATEVOL:/var/lib/awg-dns" "$DNSIMG" >/dev/null || exit 1
+    -v "$NAMESVOL:/var/lib/awg-names:ro" -v "$STATEVOL:/var/lib/awg-dns" \
+    -v "$PUBVOL:/var/lib/awg-dns-public" "$DNSIMG" >/dev/null || exit 1
 # The status page, at the slot unbound.conf answers amiunder.vpn with, so the
 # name, the resolver and the page are tested together rather than one at a time.
-docker run -d --name "$STATUS" --network "$DNSNET" --ip "$STATUS_IP" "$STATUSIMG" >/dev/null || exit 1
+docker run -d --name "$STATUS" --network "$DNSNET" --ip "$STATUS_IP" --read-only \
+    -v "$PUBVOL:/var/www/state:ro" -v "$NAMESVOL:/var/lib/awg-names:ro" "$STATUSIMG" >/dev/null || exit 1
 docker run -d --name "$SRV" --network "$NET" --ip 172.31.98.10 \
     --cap-add NET_ADMIN --device /dev/net/tun --sysctl net.ipv4.ip_forward=1 \
     -v "$WORK/server.conf:/etc/amnezia/awg/awg0.conf:ro" \
@@ -311,6 +315,32 @@ done
 rev=$(awk -F. '{print $4"."$3"."$2"."$1}' <<< "${phone_ip:-0.0.0.0}")
 ask -type=PTR "$rev.in-addr.arpa" | grep -q 'phone.peer.vpn'
 check $? "and its address reads back as phone.peer.vpn"
+
+# DIRECTION 8: the other .vpn pages, through the tunnel. The page itself is
+# one script that picks by name; what is tested here is what it reads.
+hr "DIRECTION 8: dns, node, speed and mtu pages, through the tunnel"
+page() { docker exec "$CLI" curl -fsS --max-time 15 "$@" 2>&1; }
+within 30 'grep -q "^mode=" <<< "$(page "http://$STATUS_IP/state/dns.txt")"'
+check $? "dns.vpn reads the resolver's public counters"
+grep -q "^blocked=[1-9]" <<< "$(page "http://$STATUS_IP/state/dns.txt")"; check $? "...with the blocklist counted"
+grep -qE '\.(example|net|org)' <<< "$(page "http://$STATUS_IP/state/dns.txt")"; [ $? != 0 ]
+check $? "...and no name in them"
+grep -q '^address=192.168.7.7' <<< "$(page "http://$STATUS_IP/cgi-bin/lookup?name=nas.home")"
+check $? "the lookup asks the tunnel resolver (nas.home)"
+grep -q '^status=nxdomain' <<< "$(page "http://$STATUS_IP/cgi-bin/lookup?name=example.net")"
+check $? "...and reports a blocked name"
+grep -q '^status=refused' <<< "$(page "http://$STATUS_IP/cgi-bin/lookup?name=a;id")"
+check $? "...and refuses anything that is not a name"
+out_node=$(page "http://$STATUS_IP/cgi-bin/node")
+echo "$out_node"
+grep -q "^protocol=$V" <<< "$out_node" && grep -q '^peers=[0-9]' <<< "$out_node"
+check $? "node.vpn reads the node's facts and the number of named peers"
+grep -q 'phone' <<< "$out_node"; [ $? != 0 ]; check $? "...and never a peer's name"
+sunk=$(docker exec "$CLI" sh -c "head -c 300000 /dev/urandom | curl -fsS --max-time 15 --data-binary @- -H 'Content-Type: application/octet-stream' http://$STATUS_IP/cgi-bin/sink" 2>&1)
+[ "$sunk" = 300000 ]; check $? "speed.vpn's upload sink reads the whole body through the tunnel"
+got=$(docker exec "$CLI" sh -c "curl -fsS --max-time 15 http://$STATUS_IP/mtu/1024k.bin | wc -c" 2>&1 | tr -d ' ')
+[ "$got" = 1048576 ]; check $? "mtu.vpn's largest file arrives whole through the tunnel"
+grep -q 'leak.vpn' <<< "$(page "http://$STATUS_IP/app.js")"; check $? "the page script knows every name it answers to"
 
 hr "RESULT"
 if [ "$FAIL" = 0 ]; then

@@ -45,6 +45,8 @@ services:
       - awg-names:/var/lib/awg-names:ro
       # What `awg-tool dns block|allow` writes, kept across restarts.
       - awg-dns-state:/var/lib/awg-dns
+      # Counts and counters for the dns.vpn page. No names.
+      - awg-dns-public:/var/lib/awg-dns-public
     networks:
       dns:
         ipv4_address: 172.29.172.254
@@ -99,9 +101,10 @@ services:
   #
   #   docker compose up -d --scale status=0
   #
-  # It serves one static page and one CGI echo, needs no capabilities, writes
-  # nothing, and publishes no port — reachability is decided by the network it
-  # sits on, exactly like the resolver next to it.
+  # The same container answers dns.vpn, speed.vpn, mtu.vpn, node.vpn and any
+  # <nonce>.leak.vpn: one page that reads the name it was opened by. It needs
+  # no capabilities, writes nothing, and publishes no port: reachability is
+  # decided by the network it sits on, exactly like the resolver next to it.
   status:
     image: vaiprog/amnezia-wg-status:latest
     container_name: awg-status
@@ -109,6 +112,11 @@ services:
     depends_on: [dns]
     cap_drop: [ALL]
     read_only: true
+    volumes:
+      # The resolver's public counters, served as /state/dns.txt.
+      - awg-dns-public:/var/www/state:ro
+      # The node's facts and the number of named peers; never the names.
+      - awg-names:/var/lib/awg-names:ro
     networks:
       dns:
         # Fixed on purpose: unbound.conf answers amiunder.vpn with this exact
@@ -132,6 +140,7 @@ volumes:
   awg-log:
   awg-names:
   awg-dns-state:
+  awg-dns-public:
 
 # The client side of the DNS arrangement, for the config this pair uses:
 #
