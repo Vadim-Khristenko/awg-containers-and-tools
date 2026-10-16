@@ -36,6 +36,7 @@ services:
     # environment:
     #   AWG_DNS_MODE: auto
     #   AWG_DNS_BLOCKLISTS: "https://example.org/hosts.txt"
+    #   AWG_DNS_CANARY: "firefox icloud"   # keep browsers and Private Relay on it
     volumes:
       # Blocklists, allowlist, your own records and .vpn names: optional, read
       # only, and reloaded without a restart. Layout in containers/README.md.

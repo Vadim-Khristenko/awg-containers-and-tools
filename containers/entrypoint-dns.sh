@@ -20,6 +20,8 @@
 #   AWG_DNS_REFRESH     seconds between list refreshes (default 86400, 0 = once)
 #   AWG_DNS_IPV6        1 to listen and resolve over IPv6 as well
 #   AWG_DNS_NAMES       the node's names file, for <label>.peer.vpn
+#   AWG_DNS_CANARY      which encrypted-DNS bypasses to switch off: firefox
+#                       (default), icloud, both space separated, or none
 #
 # The pre-0.5 blocklist directory, /etc/unbound/blacklist.d, is read too.
 set -eu
@@ -32,6 +34,7 @@ MODE="${AWG_DNS_MODE:-auto}"
 FORWARD="${AWG_DNS_FORWARD:-1.1.1.1@853#cloudflare-dns.com 9.9.9.9@853#dns.quad9.net}"
 REFRESH="${AWG_DNS_REFRESH:-86400}"
 IPV6="${AWG_DNS_IPV6:-0}"
+CANARY="${AWG_DNS_CANARY:-firefox}"
 NAMES="${AWG_DNS_NAMES:-/var/lib/awg-names/names.hosts}"
 # Where `awg-tool dns block|allow` writes: a volume of its own, since the
 # operator directory is usually mounted read-only.
@@ -126,6 +129,23 @@ generate() {
     else
         names_from "$CONF_DIR"/blocklists.d/* "$LEGACY_BLOCK_DIR"/* "$RUN"/lists/*.txt "$MANAGED"/block.txt | sort -u > "$blocked"
         names_from "$CONF_DIR"/allowlist.d/* "$MANAGED"/allow.txt | sort -u > "$allowed"
+    fi
+    # The names a network answers NXDOMAIN to tell software to keep to its
+    # resolver: Firefox then does not switch to its own DoH provider, and iCloud
+    # Private Relay stays off. Either would skip this resolver and its lists.
+    # They join the blocklist, so the allowlist still overrides them.
+    canaries=
+    for c in $CANARY; do
+        case "$c" in
+            firefox) canaries="$canaries use-application-dns.net" ;;
+            icloud)  canaries="$canaries mask.icloud.com mask-h2.icloud.com" ;;
+            none)    ;;
+            *)       say "AWG_DNS_CANARY: $c is not firefox, icloud or none, ignored" ;;
+        esac
+    done
+    if [ -n "$canaries" ]; then
+        printf '%s\n' $canaries | sort -u - "$blocked" > "$blocked.new"
+        mv -f "$blocked.new" "$blocked"
     fi
 
     {
