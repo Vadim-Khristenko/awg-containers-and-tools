@@ -1,0 +1,13 @@
+[package]
+name = "awg-dns-chain"
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+repository = "https://github.com/Vadim-Khristenko/awg-containers-and-tools"
+description = "Asks a list of DNS upstreams in order and moves on when one cannot answer"
+
+# No dependencies on purpose: it is built inside the resolver image's own
+# build stage, from this directory alone, and it has to stay small enough to
+# read in one sitting.
+[dependencies]

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/awg-core", "crates/awg-cli"]
+# containers/dns-chain is built on its own inside the resolver image too, so it
+# keeps a self-contained manifest and no dependencies.
+members = ["crates/awg-core", "crates/awg-cli", "containers/dns-chain"]
 
 [workspace.package]
 version = "0.4.0"
