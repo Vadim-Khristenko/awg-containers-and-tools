@@ -40,8 +40,9 @@ LABEL org.opencontainers.image.title="amnezia-wg-dns — tunnel-only resolver (u
 # root process.
 RUN apk add --no-cache unbound libcap \
  && rm -rf /var/cache/apk/* /usr/share/man \
- && mkdir -p /var/log/unbound /etc/unbound/blacklist.d \
- && chown unbound:unbound /var/log/unbound \
+ && mkdir -p /var/log/unbound /etc/unbound/blacklist.d /run/awg-dns \
+      /etc/awg-dns/blocklists.d /etc/awg-dns/allowlist.d /etc/awg-dns/records.d /etc/awg-dns/vpn.d \
+ && chown unbound:unbound /var/log/unbound /run/awg-dns \
  && setcap cap_net_bind_service=+ep /usr/sbin/unbound
 
 COPY unbound.conf /etc/unbound/unbound.conf

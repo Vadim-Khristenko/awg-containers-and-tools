@@ -35,6 +35,8 @@ SRV=awg-dnstest-server
 CLI=awg-dnstest-client
 DNS=awg-dnstest-dns
 STATUS=awg-dnstest-status
+# The node writes peer names here and the resolver reads them.
+NAMESVOL=awgdnstest-names
 BY1=awg-dnstest-bystander-net
 BY2=awg-dnstest-bystander-bridge
 RESOLVER=172.29.172.254
@@ -50,6 +52,7 @@ check() { if [ "$1" = 0 ]; then echo "  PASS  $2"; else echo "  FAIL  $2"; FAIL=
 cleanup() {
     docker rm -f "$SRV" "$CLI" "$DNS" "$STATUS" "$BY1" "$BY2" >/dev/null 2>&1
     docker network rm "$NET" "$DNSNET" >/dev/null 2>&1
+    docker volume rm "$NAMESVOL" >/dev/null 2>&1
     if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
@@ -112,14 +115,29 @@ example.net
 0.0.0.0 also-blocked.example
 EOF
 
+# The operator surface: an allowlist punching a hole in a blocked zone, a
+# record of their own, a name in the .vpn zone.
+mkdir -p "$WORK/dns/allowlist.d" "$WORK/dns/records.d" "$WORK/dns/vpn.d"
+printf 'www.example.net\n' > "$WORK/dns/allowlist.d/test.txt"
+printf 'nas.home A 192.168.7.7\n' > "$WORK/dns/records.d/test.records"
+printf 'files.vpn A 172.29.172.250\n' > "$WORK/dns/vpn.d/test.records"
+chmod -R a+rX "$WORK/dns"
+docker volume create "$NAMESVOL" >/dev/null || exit 1
+
+# Run the way docker-compose.yml runs it: read-only, with its two tmpfs. A
+# resolver that only works writable is one the compose file cannot start.
 docker run -d --name "$DNS" --network "$DNSNET" --ip "$RESOLVER" \
-    -v "$WORK/blocklist.txt:/etc/unbound/blacklist.d/test.txt:ro" "$DNSIMG" >/dev/null || exit 1
+    --read-only --tmpfs /var/log/unbound --tmpfs /run/awg-dns:uid=100,gid=101 \
+    -v "$WORK/blocklist.txt:/etc/unbound/blacklist.d/test.txt:ro" \
+    -v "$WORK/dns:/etc/awg-dns:ro" \
+    -v "$NAMESVOL:/var/lib/awg-names:ro" "$DNSIMG" >/dev/null || exit 1
 # The status page, at the slot unbound.conf answers amiunder.vpn with, so the
 # name, the resolver and the page are tested together rather than one at a time.
 docker run -d --name "$STATUS" --network "$DNSNET" --ip "$STATUS_IP" "$STATUSIMG" >/dev/null || exit 1
 docker run -d --name "$SRV" --network "$NET" --ip 172.31.98.10 \
     --cap-add NET_ADMIN --device /dev/net/tun --sysctl net.ipv4.ip_forward=1 \
-    -v "$WORK/server.conf:/etc/amnezia/awg/awg0.conf:ro" "$IMG" >/dev/null || exit 1
+    -v "$WORK/server.conf:/etc/amnezia/awg/awg0.conf:ro" \
+    -v "$NAMESVOL:/var/lib/awg-names" "$IMG" >/dev/null || exit 1
 # The server is the only member of both networks — that is the whole mechanism.
 docker network connect "$DNSNET" "$SRV" || exit 1
 sleep 3
@@ -219,6 +237,39 @@ echo "$out_leak"
 out_named=$(docker exec "$CLI" env AWG_CLIENT_DNS="$RESOLVER" awg-leak 2>&1)
 echo "$out_named" | head -2
 grep -q "docker's embedded" <<< "$out_named"; check $? "awg-leak names docker's embedded resolver instead of the tunnel's"
+
+# DIRECTION 7: what the operator configures, and what the node tells the
+# resolver, both answered to the tunnel client.
+hr "DIRECTION 7: allowlist, own records, the .vpn zone and peer names"
+ask() { docker exec "$CLI" timeout 8 nslookup "$@" "$RESOLVER" 2>&1; }
+ask www.example.net | grep -qE '^Address: [0-9]'
+check $? "the allowlist lets www.example.net through a blocked example.net"
+ask nas.home | grep -q '192.168.7.7'; check $? "an own record answers (nas.home)"
+ask files.vpn | grep -q '172.29.172.250'; check $? "an own .vpn record answers (files.vpn)"
+ask dns.vpn | grep -q "$STATUS_IP"; check $? "the built-in pages are in the zone (dns.vpn)"
+ask resolver.vpn | grep -q "$RESOLVER"; check $? "the resolver names itself (resolver.vpn)"
+ask "n$RANDOM.leak.vpn" | grep -q "$STATUS_IP"; check $? "any <nonce>.leak.vpn answers"
+
+issued=$(docker exec -e AWG_ENDPOINT=172.31.98.10:51820 "$SRV" awg-peer add phone 2>&1)
+phone_ip=$(sed -n 's/^Address = //p' <<< "$issued" | cut -d/ -f1)
+echo "issued phone at ${phone_ip:-nothing}"
+if [ "$V" = 3.1 ]; then
+    grep -q '^RandomTrailers' "$WORK/server.conf" && grep -q '^RandomTrailers' <<< "$issued"
+    check $? "the issued config carries the server's RandomTrailers"
+fi
+allowed=$(sed -n 's/^AllowedIPs = //p' <<< "$issued")
+echo "issued AllowedIPs: $allowed"
+grep -qE '172\.29\.172\.(0/24|253)|0\.0\.0\.0/0' <<< "$allowed"
+check $? "the issued config routes the status page, not only the resolver"
+found=
+for _ in $(seq 1 6); do
+    if ask phone.peer.vpn | grep -q "${phone_ip:-none}"; then found=1; break; fi
+    sleep 3
+done
+[ -n "$found" ]; check $? "a new peer answers as phone.peer.vpn without a resolver restart"
+rev=$(awk -F. '{print $4"."$3"."$2"."$1}' <<< "${phone_ip:-0.0.0.0}")
+ask -type=PTR "$rev.in-addr.arpa" | grep -q 'phone.peer.vpn'
+check $? "and its address reads back as phone.peer.vpn"
 
 hr "RESULT"
 if [ "$FAIL" = 0 ]; then

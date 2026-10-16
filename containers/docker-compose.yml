@@ -25,7 +25,23 @@ services:
     # It answers UDP/53 and needs no privileges to do it.
     cap_drop: [ALL]
     read_only: true
-    tmpfs: ["/var/log/unbound"]
+    # The generated config, the downloaded lists and the stats live here; it
+    # belongs to the unbound user (100:101) the image runs as.
+    tmpfs:
+      - /var/log/unbound
+      - /run/awg-dns:uid=100,gid=101
+    # auto (default) resolves from the root and falls back to DoT forwarders
+    # when the root does not answer from this network; recursive or forward
+    # pin one. See containers/README.md for every variable.
+    # environment:
+    #   AWG_DNS_MODE: auto
+    #   AWG_DNS_BLOCKLISTS: "https://example.org/hosts.txt"
+    volumes:
+      # Blocklists, allowlist, your own records and .vpn names: optional, read
+      # only, and reloaded without a restart. Layout in containers/README.md.
+      # - ./dns:/etc/awg-dns:ro
+      # The node's peer names, for <label>.peer.vpn. No keys in it.
+      - awg-names:/var/lib/awg-names:ro
     networks:
       dns:
         ipv4_address: 172.29.172.254
@@ -51,6 +67,8 @@ services:
       # vanish with the container that knew about them.
       - awg-state:/var/lib/awg
       - awg-log:/var/log/awg
+      # Where awg-peer writes the peer names the resolver answers for.
+      - awg-names:/var/lib/awg-names
     networks:
       awg:
         ipv4_address: 172.31.99.10
@@ -109,6 +127,7 @@ networks:
 volumes:
   awg-state:
   awg-log:
+  awg-names:
 
 # The client side of the DNS arrangement, for the config this pair uses:
 #
