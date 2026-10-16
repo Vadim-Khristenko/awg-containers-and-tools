@@ -122,8 +122,16 @@ records_from() {
 }
 
 # The page's view of the resolver, in key=value lines.
+#
+# In a subshell, and never fatal: on a read-only container without the public
+# volume the directory is there and looks writable, and a failed redirect
+# under `set -e` would take the whole resolver down with it.
 publish() {
-    [ -d "$PUBLIC" ] && [ -w "$PUBLIC" ] || return 0
+    [ -d "$PUBLIC" ] || return 0
+    ( publish_to "$PUBLIC/.dns.txt.new" && mv -f "$PUBLIC/.dns.txt.new" "$PUBLIC/dns.txt" ) 2>/dev/null || true
+}
+
+publish_to() {
     {
         echo "mode=$MODE"
         echo "blocked=$(grep -c 'always_nxdomain' "$OUT" 2>/dev/null || echo 0)"
@@ -134,7 +142,7 @@ publish() {
         if [ -r "$RUN/stats" ]; then
             grep -E '^(total\.num\.(queries|cachehits|cachemiss|expired)|num\.answer\.rcode\.(NOERROR|NXDOMAIN|SERVFAIL)|time\.up|total\.recursion\.time\.(avg|median))=' "$RUN/stats"
         fi
-    } > "$PUBLIC/.dns.txt.new" 2>/dev/null && mv -f "$PUBLIC/.dns.txt.new" "$PUBLIC/dns.txt"
+    } > "$1"
 }
 
 generate() {
