@@ -1,8 +1,8 @@
-# AmneziaWG __AWG__ — self-hosted
+# AmneziaWG __AWG__, self-hosted
 
 > **Unofficial community build.** Not affiliated with, endorsed by or supported by AmneziaVPN. Report problems at [the project repository](https://github.com/Vadim-Khristenko/awg-containers-and-tools/issues), not upstream.
 
-A single-purpose image that runs an **AmneziaWG __AWG__** endpoint — server or client — on `amneziawg-go __GOTAG__`.
+A single-purpose image that runs an **AmneziaWG __AWG__** endpoint, server or client, on `amneziawg-go __GOTAG__`.
 
 | | |
 |---|---|
@@ -16,7 +16,7 @@ A single-purpose image that runs an **AmneziaWG __AWG__** endpoint — server or
 
 ## Why this image exists
 
-Self-hosting AmneziaWG 3.x needs a config path that actually reaches the daemon. These images skip `awg-quick` entirely and write the configuration straight to `amneziawg-go`'s UAPI socket: one request format, one code path, valid for every generation from 1.0 to 3.1 and independent of what the `amneziawg-tools` in the image do or do not parse in a given release — `amneziawg-tools` used to know only the 2.0 keys, and this is not the first time the tools trailed the daemon.
+Self-hosting AmneziaWG 3.x needs a config path that actually reaches the daemon. These images skip `awg-quick` entirely and write the configuration straight to `amneziawg-go`'s UAPI socket: one request format, one code path, valid for every generation from 1.0 to 3.1 and independent of what the `amneziawg-tools` in the image do or do not parse in a given release: `amneziawg-tools` used to know only the 2.0 keys, and this is not the first time the tools trailed the daemon.
 
 ```bash
 $ docker exec awg awg-uapi get | head -1
@@ -38,7 +38,7 @@ docker run -d --name awg \
   vaiprog/__IMAGE__:latest
 ```
 
-`NET_ADMIN` and `/dev/net/tun` are not optional — `amneziawg-go` is a userspace implementation and needs the tun device. The container is otherwise unprivileged, which is why `ip_forward` has to be handed in rather than set from inside.
+`NET_ADMIN` and `/dev/net/tun` are not optional: `amneziawg-go` is a userspace implementation and needs the tun device. The container is otherwise unprivileged, which is why `ip_forward` has to be handed in rather than set from inside.
 
 Generate the config with the companion tool, which knows each client's limits and the protocol's real constraints:
 
@@ -46,7 +46,7 @@ Generate the config with the companion tool, which knows each client's limits an
 awg-tool gen --version __AWG__
 ```
 
-The obfuscation parameters must be **identical on both ends** — they are a shared secret, and mismatched peers never complete a handshake. Generate the block once and paste the same one into the server and the client.
+The obfuscation parameters must be **identical on both ends**: they are a shared secret, and mismatched peers never complete a handshake. Generate the block once and paste the same one into the server and the client.
 
 ## Managing peers
 
@@ -57,13 +57,26 @@ docker exec awg awg-peer rm laptop      # revoke
 docker exec awg awg-uapi get            # raw daemon state
 ```
 
-A peer's private key is generated inside the container, printed once and never written to disk.
+A peer's private key is generated inside the container, printed once and never written to disk. From your own machine, `awg-tool peer add|list|rm` does the same here or over SSH, and `awg-tool rotate` gives a running node new obfuscation with a backup and a rollback.
+
+## When it does not work
+
+```bash
+docker exec awg awg-health      # exit 0 when the node can carry traffic
+docker exec awg awg-under       # "am I under the VPN?" from a client node
+docker exec awg awg-leak        # DNS, IPv6 and routing leaks from a client node
+docker exec awg awg-mtu         # the largest packet the tunnel really carries
+docker exec awg awg-watch       # peers: active, quiet or never connected
+docker exec awg awg-dump        # the whole picture, made for pasting
+```
+
+`awg-watch` also runs in the background by default and logs peers that go quiet or come back (`AWG_WATCH=off` leaves it out).
 
 ## DNS without leaks
 
 Pair this with `vaiprog/amnezia-wg-dns`, which sits on its own bridge at `172.29.172.254` and publishes no port. A client configured with `DNS = 172.29.172.254` can only be answered through the tunnel: a query that escapes it reaches nothing at all instead of quietly reaching your ISP's resolver.
 
-A ready `docker-compose.yml` with that arrangement is in the repository.
+A ready `docker-compose.yml` with that arrangement is in the repository, along with the tunnel's own pages: `amiunder.vpn`, `dns.vpn`, `speed.vpn`, `mtu.vpn`, `leak.vpn` and `node.vpn`.
 
 ## Every install is different
 
@@ -71,13 +84,14 @@ The container does not ship a default parameter set, and the generator draws a n
 
 ## Tags
 
-`latest` tracks the newest release. Version tags such as `v0.1.0` are immutable — pin one if you want reproducible deployments.
+`latest` tracks the newest release. Version tags such as `v0.5.0` are immutable: pin one if you want reproducible deployments.
 
 ## Volumes
 
 | Path | What is lost without it |
 |---|---|
-| `/var/lib/awg` | peer records and the boot counter — a restart looks like a first start and peers vanish |
+| `/var/lib/awg` | peer records and the boot counter: a restart looks like a first start and peers vanish |
 | `/var/log/awg` | the operational event log |
+| `/var/lib/awg-names` | the peer names the resolver answers as `<label>.peer.vpn`, and the node's facts for `node.vpn` |
 
-The event log records when the node came up, when the interface was configured, and who was granted or denied access. It carries no private keys, preshared keys or config bodies. It is still the list of who has access, so treat it as sensitive.
+The event log records when the node came up, when the interface was configured, and who was granted or denied access, and which peers went quiet or came back. It carries no private keys, preshared keys or config bodies. It is still the list of who has access, so treat it as sensitive.
