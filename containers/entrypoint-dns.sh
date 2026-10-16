@@ -20,6 +20,8 @@
 #   AWG_DNS_REFRESH     seconds between list refreshes (default 86400, 0 = once)
 #   AWG_DNS_IPV6        1 to listen and resolve over IPv6 as well
 #   AWG_DNS_NAMES       the node's names file, for <label>.peer.vpn
+#   AWG_DNS_PUBLIC      where the counters dns.vpn shows are written
+#                       (default /var/lib/awg-dns-public, skipped if absent)
 #   AWG_DNS_CANARY      which encrypted-DNS bypasses to switch off: firefox
 #                       (default), icloud, both space separated, or none
 #
@@ -39,6 +41,9 @@ NAMES="${AWG_DNS_NAMES:-/var/lib/awg-names/names.hosts}"
 # Where `awg-tool dns block|allow` writes: a volume of its own, since the
 # operator directory is usually mounted read-only.
 MANAGED="${AWG_DNS_MANAGED:-/var/lib/awg-dns}"
+# What the dns.vpn page may show: counts and counters, never a name anybody
+# asked for or a name on a list.
+PUBLIC="${AWG_DNS_PUBLIC:-/var/lib/awg-dns-public}"
 SELF="${AWG_DNS_ADDRESS:-172.29.172.254}"
 STATUS="${AWG_DNS_STATUS_ADDRESS:-172.29.172.253}"
 TTL=60
@@ -114,6 +119,22 @@ records_from() {
             printf "    local-data: %s%s. %d IN %s %s%s\n", q, name, ttl, type, value, q
         }
     ' $FILES
+}
+
+# The page's view of the resolver, in key=value lines.
+publish() {
+    [ -d "$PUBLIC" ] && [ -w "$PUBLIC" ] || return 0
+    {
+        echo "mode=$MODE"
+        echo "blocked=$(grep -c 'always_nxdomain' "$OUT" 2>/dev/null || echo 0)"
+        echo "allowed=$(wc -l < "$RUN/allowed.txt" 2>/dev/null | tr -d ' ' || echo 0)"
+        echo "canary=$CANARY"
+        echo "safe=$SAFE"
+        echo "updated=$(date +%s)"
+        if [ -r "$RUN/stats" ]; then
+            grep -E '^(total\.num\.(queries|cachehits|cachemiss|expired)|num\.answer\.rcode\.(NOERROR|NXDOMAIN|SERVFAIL)|time\.up|total\.recursion\.time\.(avg|median))=' "$RUN/stats"
+        fi
+    } > "$PUBLIC/.dns.txt.new" 2>/dev/null && mv -f "$PUBLIC/.dns.txt.new" "$PUBLIC/dns.txt"
 }
 
 generate() {
@@ -265,6 +286,7 @@ esac
 
 fetch_lists
 generate || true
+publish
 
 /usr/sbin/unbound -d -p -c /etc/unbound/unbound.conf &
 pid=$!
@@ -282,7 +304,8 @@ stamp() {
 }
 last_names=$(stamp)
 since_fetch=0
-since_stats=0
+# The first counters a few seconds in rather than a minute in.
+since_stats=50
 while kill -0 "$pid" 2>/dev/null; do
     sleep 5 &
     wait $! || true
@@ -298,9 +321,11 @@ while kill -0 "$pid" 2>/dev/null; do
     if [ "$now_names" != "$last_names" ] || [ "$refetch" = 1 ]; then
         last_names=$now_names
         if generate; then reload; fi
+        publish
     fi
     if [ "$since_stats" -ge 60 ]; then
         unbound-control stats_noreset > "$RUN/stats.tmp" 2>/dev/null && mv -f "$RUN/stats.tmp" "$RUN/stats"
+        publish
         since_stats=0
     fi
 done
