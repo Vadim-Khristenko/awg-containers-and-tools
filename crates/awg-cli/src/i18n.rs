@@ -396,8 +396,8 @@ strings! {
         "Этот инструмент впервые видит"
     ),
     MsgVerifyFingerprint => (
-        "Check that against the server's own `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`.",
-        "Сверьте это с выводом `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` на самом сервере."
+        "Check that against the line of the same type on the server itself: `for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf $f; done`",
+        "Сверьте это со строкой того же типа на самом сервере: `for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf $f; done`"
     ),
     AskTrustHost => ("Trust this host?", "Доверять этому хосту?"),
     MsgNotTrusted => ("not trusted, nothing was sent", "не доверяем, ничего не отправлено"),
