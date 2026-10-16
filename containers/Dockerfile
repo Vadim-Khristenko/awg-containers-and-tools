@@ -91,7 +91,8 @@ COPY awg-dump.sh   /usr/bin/awg-dump
 COPY awg-under     /usr/bin/awg-under
 COPY awg-leak      /usr/bin/awg-leak
 COPY awg-mtu       /usr/bin/awg-mtu
-RUN chmod +x /usr/bin/entrypoint.sh /usr/bin/awg-uapi /usr/bin/awg-peer /usr/bin/awg-health /usr/bin/awg-dump /usr/bin/awg-under /usr/bin/awg-leak /usr/bin/awg-mtu
+COPY awg-watch     /usr/bin/awg-watch
+RUN chmod +x /usr/bin/entrypoint.sh /usr/bin/awg-uapi /usr/bin/awg-peer /usr/bin/awg-health /usr/bin/awg-dump /usr/bin/awg-under /usr/bin/awg-leak /usr/bin/awg-mtu /usr/bin/awg-watch
 ENV AWG_IFACE=awg0
 # So the event log can say which generation is running without the operator
 # having to map an image name back to a protocol.

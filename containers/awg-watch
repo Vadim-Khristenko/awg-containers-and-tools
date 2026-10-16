@@ -1,0 +1,106 @@
+#!/bin/bash
+# Peers that went quiet, noticed by the node itself.
+#
+#   awg-watch              one look: every peer, whether it is active, quiet or
+#                          has never connected, and when it last did
+#   awg-watch --loop       what the entrypoint runs: a look a minute, and an
+#                          event in the log and `docker logs` whenever a peer
+#                          goes quiet or comes back
+#
+#   AWG_WATCH_QUIET=600    seconds without a handshake before a peer counts as
+#                          quiet. A live peer handshakes every two minutes, so
+#                          the default is five missed rounds.
+#   AWG_WATCH_INTERVAL=60  seconds between looks in --loop
+#
+# Only public keys and labels are named, the same as everything else in the
+# event log.
+set -uo pipefail
+
+IFACE="${AWG_IFACE:-awg0}"
+SOCK="${AWG_SOCK_DIR:-/var/run/amneziawg}/${IFACE}.sock"
+PEERS_DIR="${AWG_PEERS_DIR:-/var/lib/awg/peers.d}"
+QUIET="${AWG_WATCH_QUIET:-600}"
+INTERVAL="${AWG_WATCH_INTERVAL:-60}"
+# shellcheck source=/dev/null
+. /usr/lib/awg/log.sh
+
+hexb64() { printf "$(printf '%s' "$1" | sed 's/../\\x&/g')" | base64 | tr -d '\n'; }
+
+label_of() {
+    local pub=$1 f
+    for f in "$PEERS_DIR"/*.peer; do
+        [ -e "$f" ] || continue
+        if grep -qxF "PublicKey=$pub" "$f"; then basename "$f" .peer; return 0; fi
+    done
+    printf '(unlabelled)'
+}
+
+# One line per peer: <hex public key> <last handshake, epoch seconds or 0>.
+peers() {
+    [ -S "$SOCK" ] || return 1
+    printf 'get=1\n\n' | socat -t 15 - "UNIX-CONNECT:$SOCK" | awk -F= '
+        $1 == "public_key" { if (pub != "") print pub, hs; pub = $2; hs = 0 }
+        $1 == "last_handshake_time_sec" { hs = $2 }
+        END { if (pub != "") print pub, hs }
+    '
+}
+
+state_of() {
+    local hs=$1 now=$2
+    if [ "$hs" = 0 ]; then echo never
+    elif [ $((now - hs)) -gt "$QUIET" ]; then echo quiet
+    else echo active
+    fi
+}
+
+when() { if [ "$1" = 0 ]; then echo never; else date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo "epoch:$1"; fi; }
+
+once() {
+    local list now pub hs b64
+    list=$(peers) || { echo "awg-watch: no UAPI socket at $SOCK" >&2; return 2; }
+    now=$(date +%s)
+    printf '%-16s %-44s %-7s %s\n' LABEL PUBLIC_KEY STATE LAST_HANDSHAKE
+    while read -r pub hs; do
+        [ -n "$pub" ] || continue
+        b64=$(hexb64 "$pub")
+        printf '%-16s %-44s %-7s %s\n' "$(label_of "$b64")" "$b64" "$(state_of "$hs" "$now")" "$(when "$hs")"
+    done <<< "$list"
+}
+
+loop() {
+    declare -A seen=()
+    local first=1 list now pub hs st b64 was
+    while :; do
+        if list=$(peers); then
+            now=$(date +%s)
+            while read -r pub hs; do
+                [ -n "$pub" ] || continue
+                st=$(state_of "$hs" "$now")
+                was=${seen[$pub]:-}
+                seen[$pub]=$st
+                # The first look only learns the states: a restart is not
+                # news about every peer at once.
+                [ "$first" = 1 ] && continue
+                [ "$was" = "$st" ] && continue
+                b64=$(hexb64 "$pub")
+                case "$was>$st" in
+                    active\>quiet)
+                        awg_event peer-quiet "peer=$b64" "label=$(label_of "$b64")" "last_handshake=$(when "$hs")" ;;
+                    quiet\>active)
+                        awg_event peer-back "peer=$b64" "label=$(label_of "$b64")" ;;
+                    never\>active|\>active)
+                        awg_event peer-first-handshake "peer=$b64" "label=$(label_of "$b64")" ;;
+                esac
+            done <<< "$list"
+            first=0
+        fi
+        sleep "$INTERVAL" &
+        wait $! || true
+    done
+}
+
+case "${1:-}" in
+    --loop) loop ;;
+    "")     once ;;
+    *)      echo "usage: awg-watch [--loop]" >&2; exit 2 ;;
+esac

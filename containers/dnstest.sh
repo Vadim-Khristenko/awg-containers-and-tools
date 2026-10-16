@@ -355,6 +355,24 @@ got=$(docker exec "$CLI" sh -c "curl -fsS --max-time 15 http://$STATUS_IP/mtu/10
 [ "$got" = 1048576 ]; check $? "mtu.vpn's largest file arrives whole through the tunnel"
 grep -q 'leak.vpn' <<< "$(page "http://$STATUS_IP/app.js")"; check $? "the page script knows every name it answers to"
 
+# awg-watch on the server: the loop the entrypoint started is there, and a
+# quick one with a five-second threshold sees the client go quiet, come back
+# when its tunnel restarts, and go quiet again.
+hr "awg-watch: peers going quiet and coming back"
+docker exec "$SRV" pgrep -f 'awg-watch --loop' >/dev/null; check $? "the entrypoint runs awg-watch"
+out_watch=$(docker exec "$SRV" awg-watch 2>&1)
+echo "$out_watch"
+grep -qE ' (active|quiet) ' <<< "$out_watch"; check $? "awg-watch lists the client with its state"
+docker exec -d -e AWG_WATCH_QUIET=5 -e AWG_WATCH_INTERVAL=1 -e AWG_EVENT_LOG=/tmp/watch.log "$SRV" awg-watch --loop
+sleep 8
+docker restart "$CLI" >/dev/null
+within 40 'docker exec "$SRV" grep -qs "event=peer-back" /tmp/watch.log'
+check $? "a peer that handshakes again is logged as back"
+quiet_after_back() { docker exec "$SRV" awk '/event=peer-back/ { b = 1 } b && /event=peer-quiet/ { f = 1 } END { exit !f }' /tmp/watch.log 2>/dev/null; }
+within 30 quiet_after_back
+check $? "...and as quiet once it stops"
+docker exec "$SRV" cat /tmp/watch.log
+docker exec "$SRV" pkill -n -f 'awg-watch --loop' >/dev/null 2>&1 || true
 hr "RESULT"
 if [ "$FAIL" = 0 ]; then
     echo "AWG $V DNS: reachable through the tunnel, unreachable from outside it"

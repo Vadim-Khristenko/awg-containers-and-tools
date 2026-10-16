@@ -356,9 +356,18 @@ fi
 awg_event iface-up "addr=${IF[Address]}" "mtu=${IF[MTU]:-1420}" "port=${IF[ListenPort]:-none}" \
     "nat=$do_nat" "full_tunnel=$FULL_TUNNEL"
 
+# Peers that go quiet or come back, in the same log. AWG_WATCH=off leaves it
+# out; it reads the UAPI socket once a minute and writes nothing else.
+WATCH=
+if [ "${AWG_WATCH:-on}" != off ]; then
+    AWG_PEERS_DIR="$PEERS_DIR" awg-watch --loop &
+    WATCH=$!
+fi
+
 shutdown() {
     trap - TERM INT EXIT
     awg_event stop
+    if [ -n "$WATCH" ]; then kill "$WATCH" 2>/dev/null || true; fi
     if [ "$FULL_TUNNEL" = 1 ]; then
         ip rule del table main suppress_prefixlength 0 2>/dev/null || true
         ip rule del not fwmark "$FWMARK" table "$RTABLE" 2>/dev/null || true

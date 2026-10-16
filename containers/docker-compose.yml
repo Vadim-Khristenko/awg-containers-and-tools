@@ -165,6 +165,8 @@ volumes:
 #   AWG_DUMP_REQUEST=1                      write the UAPI request to /tmp/uapi-set.req
 #                                           (contains the private key — debugging only)
 #   LOG_LEVEL=verbose                       amneziawg-go's own logging
+#   AWG_WATCH=on|off                        awg-watch: log peers that go quiet or come back
+#   AWG_WATCH_QUIET=600                     seconds without a handshake that count as quiet
 #
 # ...and by awg-peer:
 #   AWG_ENDPOINT=vpn.example.com:51820      what to write into issued configs
