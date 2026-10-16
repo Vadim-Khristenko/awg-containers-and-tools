@@ -23,7 +23,12 @@ serde = { version = "1", features = ["derive"] }
 # mangles backslash paths and `openssl-src` refuses it — plus the MSVC
 # compiler on PATH (`vcvars64.bat`). CI builds Linux, where none of this
 # applies; so do the images.
-ssh2 = { version = "0.9.6", features = ["vendored-openssl"] }
+#
+# openssl-on-win32: on Windows libssh2 otherwise uses WinCNG, which has no
+# curve25519, no ECDH and no ed25519, and offers only finite-field
+# Diffie-Hellman. OpenSSH 10 accepts none of those, so a Windows build could
+# not open a session with a current server at all.
+ssh2 = { version = "0.9.6", features = ["vendored-openssl", "openssl-on-win32"] }
 
 [profile.release]
 opt-level = "z"

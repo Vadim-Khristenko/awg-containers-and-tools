@@ -527,7 +527,20 @@ fn authenticate(sess: &Session, profile: &Profile, secret: Option<&str>) -> Resu
         Auth::Password => sess.userauth_password(user, secret.unwrap_or_default()),
         Auth::Agent => sess.userauth_agent(user),
         Auth::Key { path } | Auth::KeyWithPassphrase { path } => {
-            sess.userauth_pubkey_file(user, None, path, key_passphrase(&profile.auth, secret))
+            // libssh2 cannot always derive the public half of an OpenSSH
+            // ed25519 key itself and fails with a bare "unknown error"; the
+            // .pub that ssh-keygen leaves beside it settles that.
+            let public = path.with_extension(match path.extension() {
+                Some(e) => format!("{}.pub", e.to_string_lossy()),
+                None => "pub".into(),
+            });
+            let public = public.exists().then_some(public);
+            sess.userauth_pubkey_file(
+                user,
+                public.as_deref(),
+                path,
+                key_passphrase(&profile.auth, secret),
+            )
         }
     };
     r.map_err(|e| {
