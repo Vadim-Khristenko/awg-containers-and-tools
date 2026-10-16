@@ -39,6 +39,7 @@ fn main() {
         Some("under") | Some("amiunder") => cmd_under(&args, lang),
         Some("dns") => ops::cmd_dns(&args, lang),
         Some("peer") | Some("peers") => ops::cmd_peer(&args, lang),
+        Some("rotate") => ops::cmd_rotate(&args, lang),
         Some("status") => ops::cmd_status(&args, lang),
         Some("logs") => ops::cmd_logs(&args, lang),
         Some("doctor") | Some("diagnose") => ops::cmd_doctor(&args, lang),
@@ -199,6 +200,8 @@ fn usage(lang: Lang) {
         "  awg-tool peer add <label> [ip] [--out FILE] [--vpn] [--mihomo] | list | rm <label|pubkey>"
     );
     println!("      {}", t(lang, K::CmdPeer));
+    println!("  awg-tool rotate [--container X] [--dry-run] [--yes] [--out FILE] [any gen option]");
+    println!("      {}", t(lang, K::CmdRotate));
     println!("  awg-tool dns [status] | block|unblock|allow|unallow NAME | query NAME");
     println!("      {}", t(lang, K::CmdDns));
     println!("  awg-tool under [HOST] [--resolver 172.29.172.254] [--timeout 3] [--json]");

@@ -15,6 +15,7 @@
 //! | [`diagnose`]    | what is wrong, on what evidence, and what to do about it         |
 //! | [`faults`]      | the rules about how the container was started                    |
 //! | [`tunnel`]      | the rules about whether the protocol is working                  |
+//! | [`rotate`]      | a new obfuscation block for a running server                     |
 //!
 //! Three properties hold across all of them.
 //!
@@ -49,6 +50,7 @@ pub mod inspect;
 pub mod logs;
 pub mod obfuscation;
 pub mod peers;
+pub mod rotate;
 pub mod tunnel;
 
 pub use diagnose::{
@@ -67,8 +69,8 @@ pub use health::{
 pub use host::Host;
 pub use image::{AWG_REPOSITORIES, Generation, ImageRef, PROTOCOL_LABEL, parse_image_ref};
 pub use inspect::{
-    Inspect, image_inspect_command, inspect, inspect_command, local_image, parse_image_inspect,
-    parse_inspect,
+    Inspect, Mount, image_inspect_command, inspect, inspect_command, local_image,
+    parse_image_inspect, parse_inspect,
 };
 pub use logs::{REDACTED, logs, logs_command, looks_like_key_material, redact};
 pub use obfuscation::{

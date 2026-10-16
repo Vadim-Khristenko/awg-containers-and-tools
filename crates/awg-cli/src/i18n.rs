@@ -209,7 +209,38 @@ strings! {
         "свой резолвер этой машины не знает .vpn: её DNS идёт мимо, при поднятом туннеле это утечка"
     ),
     ErrBadResolver => ("--resolver wants an IPv4 address", "--resolver ждёт адрес IPv4"),
-    ErrBadTimeout => ("--timeout wants seconds, 1 to 60", "--timeout ждёт секунды, от 1 до 60"),    CmdHosts => (
+    ErrBadTimeout => ("--timeout wants seconds, 1 to 60", "--timeout ждёт секунды, от 1 до 60"),    CmdRotate => (
+        "new obfuscation for a running node: backup, restart, rollback if it does not come up; every client then needs the new block",
+        "новая обфускация для работающего узла: бэкап, перезапуск, откат если не поднялся; потом всем клиентам нужен новый блок"
+    ),
+    ErrNotANode => ("not an AmneziaWG node", "это не узел AmneziaWG"),
+    MsgRotating => ("Rotating the obfuscation of", "Меняю обфускацию узла"),
+    LblConfigFile => ("config on the host", "конфиг на хосте"),
+    LblChanges => ("fields that change", "меняются поля"),
+    LblClientsToUpdate => (
+        "clients that need the new block",
+        "клиенты, которым нужен новый блок"
+    ),
+    MsgDryRun => (
+        "Dry run: nothing was written.",
+        "Пробный прогон: ничего не записано."
+    ),
+    AskRotate => (
+        "Every client stops connecting until it gets the new block. Rotate now?",
+        "Все клиенты перестанут подключаться, пока не получат новый блок. Менять сейчас?"
+    ),
+    MsgRotated => (
+        "rotated; the previous config is kept at",
+        "заменено; прежний конфиг сохранён в"
+    ),
+    MsgRotateRolledBack => (
+        "the node did not come up with the new block, so the previous config is back; it was kept at",
+        "узел не поднялся с новым блоком, прежний конфиг возвращён; копия лежит в"
+    ),
+    MsgClientBlock => (
+        "Every client replaces its obfuscation lines under [Interface] with these:",
+        "Каждый клиент заменяет строки обфускации под [Interface] на эти:"
+    ),    CmdHosts => (
         "hosts the mimicry profiles may name, by role and region",
         "хосты, которые могут называть профили мимикрии, по ролям и регионам"
     ),

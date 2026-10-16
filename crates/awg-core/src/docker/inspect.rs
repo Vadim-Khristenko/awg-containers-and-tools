@@ -38,6 +38,19 @@ pub struct Inspect {
     /// Environment, with any secret-looking value already redacted.
     pub env: BTreeMap<String, String>,
     pub labels: BTreeMap<String, String>,
+    pub mounts: Vec<Mount>,
+}
+
+/// One bind mount or volume, as docker inspect lists it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Mount {
+    /// The path on the host for a bind mount, the volume's own directory for a
+    /// volume.
+    pub source: String,
+    pub destination: String,
+    pub rw: bool,
+    /// ind or olume.
+    pub kind: String,
 }
 
 /// Capability names as one spelling.
@@ -72,6 +85,22 @@ impl Inspect {
         self.sysctls
             .get("net.ipv4.ip_forward")
             .map(|v| v.trim() == "1")
+    }
+
+    /// Where a path inside the container comes from on the host, when it is
+    /// under a bind mount: the mount whose destination is the path itself or
+    /// the nearest directory above it.
+    pub fn host_path_of(&self, inside: &str) -> Option<String> {
+        self.mounts
+            .iter()
+            .filter(|m| m.kind == "bind")
+            .filter_map(|m| {
+                let dest = m.destination.trim_end_matches('/');
+                let rest = inside.strip_prefix(dest)?;
+                (rest.is_empty() || rest.starts_with('/')).then_some((dest.len(), m, rest))
+            })
+            .max_by_key(|(len, _, _)| *len)
+            .map(|(_, m, rest)| format!("{}{rest}", m.source.trim_end_matches('/')))
     }
 
     /// The interface name the entrypoint will have used.
@@ -200,6 +229,27 @@ pub fn parse_inspect(json: &str) -> Result<Inspect> {
         }
     }
 
+    let mounts = c
+        .get("Mounts")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|m| {
+                    let s = |k: &str| m.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    Mount {
+                        source: s("Source"),
+                        destination: s("Destination"),
+                        rw: m
+                            .get("RW")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                        kind: s("Type"),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let text = |v: Option<&serde_json::Value>, key: &str| -> String {
         v.and_then(|v| v.get(key))
             .and_then(|x| x.as_str())
@@ -249,6 +299,7 @@ pub fn parse_inspect(json: &str) -> Result<Inspect> {
         network_mode: text(host, "NetworkMode"),
         env,
         labels,
+        mounts,
     })
 }
 
@@ -444,6 +495,36 @@ mod tests {
         assert_eq!(
             image_inspect_command("vaiprog/amnezia-wg-3:latest").unwrap(),
             "docker image inspect vaiprog/amnezia-wg-3:latest"
+        );
+    }
+
+    #[test]
+    fn a_path_inside_maps_to_its_bind_source_and_nothing_else_does() {
+        let json = r#"[{"Id":"x","Name":"/awg3-server","Mounts":[
+            {"Type":"bind","Source":"/etc/amnezia/awg3","Destination":"/etc/amnezia/awg3","RW":false},
+            {"Type":"bind","Source":"/home/a/server.conf","Destination":"/etc/amnezia/awg/awg0.conf","RW":false},
+            {"Type":"volume","Source":"/var/lib/docker/volumes/s/_data","Destination":"/var/lib/awg","RW":true}
+        ]}]"#;
+        let i = parse_inspect(json).unwrap();
+        assert_eq!(i.mounts.len(), 3);
+        assert_eq!(
+            i.host_path_of("/etc/amnezia/awg3/server.conf").as_deref(),
+            Some("/etc/amnezia/awg3/server.conf")
+        );
+        assert_eq!(
+            i.host_path_of("/etc/amnezia/awg/awg0.conf").as_deref(),
+            Some("/home/a/server.conf"),
+            "a file mounted on its own"
+        );
+        assert_eq!(
+            i.host_path_of("/etc/amnezia/awg31/server.conf"),
+            None,
+            "a prefix is not a parent"
+        );
+        assert_eq!(
+            i.host_path_of("/var/lib/awg/peers.d/a.peer"),
+            None,
+            "a volume is not a host file"
         );
     }
 }

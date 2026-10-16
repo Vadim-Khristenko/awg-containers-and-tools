@@ -745,6 +745,85 @@ pub fn cmd_dns(args: &[String], lang: Lang) {
     }
 }
 
+/// `awg-tool rotate`: a new obfuscation block for a running node. Shows what
+/// changes and who has to be told, asks, writes the config with a backup,
+/// restarts the node and rolls back when it does not come up. `--dry-run`
+/// stops after the plan.
+pub fn cmd_rotate(args: &[String], lang: Lang) {
+    use awg_core::docker::rotate;
+
+    let (conn, found) = survey(args, lang);
+    let host = conn.host();
+    let wanted = flag(args, "--container").unwrap_or_else(|| "auto".into());
+    let nodes = pick(&found, Some(&wanted), lang);
+    let Some(node) = nodes.first() else {
+        fail(t(lang, K::MsgNoContainers).into());
+    };
+    let Some(version) = node.generation.and_then(|g| g.awg()) else {
+        fail(format!("{}: {}", t(lang, K::ErrNotANode), node.name));
+    };
+    // The node's own version unless one is named; the plan refuses a
+    // different one, since that block would not load there.
+    let mut gen_args = args.to_vec();
+    if !args.iter().any(|a| a == "--version") {
+        gen_args.extend(["--version".to_string(), version.as_str().to_string()]);
+    }
+    let opts = crate::gen_options(&gen_args, lang);
+    let plan = rotate::plan(&host, node, &opts).unwrap_or_else(|e| fail(e.to_string()));
+
+    println!(
+        "{} {} (AWG {version})",
+        t(lang, K::MsgRotating),
+        plan.container
+    );
+    println!("  {}: {}", t(lang, K::LblConfigFile), plan.host_path);
+    println!(
+        "  {} ({}): {}",
+        t(lang, K::LblChanges),
+        plan.changed.len(),
+        plan.changed.join(", ")
+    );
+    if let Ok(rows) = docker::peers::list(&host, &plan.container)
+        && !rows.is_empty()
+    {
+        let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+        println!(
+            "  {}: {}",
+            t(lang, K::LblClientsToUpdate),
+            labels.join(", ")
+        );
+    }
+    if args.iter().any(|a| a == "--dry-run") {
+        println!("{}", t(lang, K::MsgDryRun));
+        return;
+    }
+    if !args.iter().any(|a| a == "--yes") && !remote::confirm(t(lang, K::AskRotate)) {
+        fail(t(lang, K::MsgAborted).into());
+    }
+
+    let applied = rotate::apply(&host, &plan).unwrap_or_else(|e| fail(e.to_string()));
+    if applied.rolled_back {
+        eprintln!("{} {}", t(lang, K::MsgRotateRolledBack), applied.backup);
+        std::process::exit(1);
+    }
+    println!("✓ {} {}", t(lang, K::MsgRotated), applied.backup);
+
+    let mut block = plan.client_block().join("\n");
+    block.push('\n');
+    match flag(args, "--out") {
+        Some(path) => {
+            if let Err(e) = write_private(&path, &block) {
+                fail(format!("{path}: {e}"));
+            }
+            eprintln!("{} {path}", t(lang, K::MsgWrote));
+        }
+        None => {
+            println!();
+            println!("{}", t(lang, K::MsgClientBlock));
+            print!("{block}");
+        }
+    }
+}
 /// A client config holds its private key: readable by its owner only.
 pub(crate) fn write_private(path: &str, text: &str) -> std::io::Result<()> {
     std::fs::write(path, text)?;
