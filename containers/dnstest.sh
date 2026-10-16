@@ -37,6 +37,8 @@ DNS=awg-dnstest-dns
 STATUS=awg-dnstest-status
 # The node writes peer names here and the resolver reads them.
 NAMESVOL=awgdnstest-names
+# Where `awg-tool dns block|allow` writes, as awg-dns-state does in compose.
+STATEVOL=awgdnstest-dns-state
 BY1=awg-dnstest-bystander-net
 BY2=awg-dnstest-bystander-bridge
 RESOLVER=172.29.172.254
@@ -52,7 +54,7 @@ check() { if [ "$1" = 0 ]; then echo "  PASS  $2"; else echo "  FAIL  $2"; FAIL=
 cleanup() {
     docker rm -f "$SRV" "$CLI" "$DNS" "$STATUS" "$BY1" "$BY2" >/dev/null 2>&1
     docker network rm "$NET" "$DNSNET" >/dev/null 2>&1
-    docker volume rm "$NAMESVOL" >/dev/null 2>&1
+    docker volume rm "$NAMESVOL" "$STATEVOL" >/dev/null 2>&1
     if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
@@ -124,13 +126,14 @@ printf 'files.vpn A 172.29.172.250\n' > "$WORK/dns/vpn.d/test.records"
 chmod -R a+rX "$WORK/dns"
 docker volume create "$NAMESVOL" >/dev/null || exit 1
 
-# Run the way docker-compose.yml runs it: read-only, with its two tmpfs. A
+# Run the way docker-compose.yml runs it: read-only, with its two tmpfs and its
+# state volume. A
 # resolver that only works writable is one the compose file cannot start.
 docker run -d --name "$DNS" --network "$DNSNET" --ip "$RESOLVER" \
     --read-only --tmpfs /var/log/unbound --tmpfs /run/awg-dns:uid=100,gid=101 \
     -v "$WORK/blocklist.txt:/etc/unbound/blacklist.d/test.txt:ro" \
     -v "$WORK/dns:/etc/awg-dns:ro" \
-    -v "$NAMESVOL:/var/lib/awg-names:ro" "$DNSIMG" >/dev/null || exit 1
+    -v "$NAMESVOL:/var/lib/awg-names:ro" -v "$STATEVOL:/var/lib/awg-dns" "$DNSIMG" >/dev/null || exit 1
 # The status page, at the slot unbound.conf answers amiunder.vpn with, so the
 # name, the resolver and the page are tested together rather than one at a time.
 docker run -d --name "$STATUS" --network "$DNSNET" --ip "$STATUS_IP" "$STATUSIMG" >/dev/null || exit 1
@@ -278,6 +281,16 @@ ask dns.vpn | grep -q "$STATUS_IP"; check $? "the built-in pages are in the zone
 ask resolver.vpn | grep -q "$RESOLVER"; check $? "the resolver names itself (resolver.vpn)"
 ask "n$RANDOM.leak.vpn" | grep -q "$STATUS_IP"; check $? "any <nonce>.leak.vpn answers"
 
+# The managed lists, the way `awg-tool dns block|unblock` changes them: no
+# restart, the resolver picks the change up on its next tick.
+within() { for _ in $(seq 1 "$1"); do if eval "$2"; then return 0; fi; sleep 1; done; return 1; }
+docker exec "$DNS" awg-dns-list add block example.org >/dev/null 2>&1
+# nslookup fails on NXDOMAIN, and pipefail would carry that past grep.
+within 20 'grep -q NXDOMAIN <<< "$(ask example.org)"'; check $? "a name blocked through awg-dns-list stops resolving without a restart"
+grep -q 'example.org' <<< "$(docker exec "$DNS" awg-dns-list status 2>&1)"; check $? "...and the status lists it"
+docker exec "$DNS" awg-dns-list rm block example.org >/dev/null 2>&1
+within 20 'ask example.org | grep -qE "^Address: [0-9]"'; check $? "...and resolves again once it is taken off"
+
 issued=$(docker exec -e AWG_ENDPOINT=172.31.98.10:51820 "$SRV" awg-peer add phone 2>&1)
 phone_ip=$(sed -n 's/^Address = //p' <<< "$issued" | cut -d/ -f1)
 echo "issued phone at ${phone_ip:-nothing}"
@@ -305,4 +318,7 @@ if [ "$FAIL" = 0 ]; then
 else
     echo "AWG $V DNS: FAILURES above"
 fi
+# AWG_TEST_HOLD=<seconds> keeps the stack up before teardown, to look at it
+# by hand or point awg-tool at it.
+if [ -n "${AWG_TEST_HOLD:-}" ]; then echo "holding for $AWG_TEST_HOLD s"; sleep "$AWG_TEST_HOLD"; fi
 exit "$FAIL"
