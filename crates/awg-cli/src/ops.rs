@@ -74,7 +74,10 @@ fn survey(args: &[String], lang: Lang) -> (Conn, Vec<Container>) {
     };
 
     if !local {
-        return (Conn::Ssh(ssh_survey(args, lang)), local_containers());
+        let conn = Conn::Ssh(ssh_survey(args, lang));
+        let found =
+            docker::find_awg_containers(&conn.host()).unwrap_or_else(|e| fail(e.to_string()));
+        return (conn, found);
     }
 
     eprintln!("{} {}", t(lang, K::MsgConnecting), t(lang, K::MsgLocally));
@@ -98,10 +101,6 @@ fn local_is_the_only_target() -> bool {
 /// Only worth asking about when there is something to find.
 fn docker_available() -> bool {
     docker::docker_available()
-}
-
-fn local_containers() -> Vec<Container> {
-    docker::find_local_containers().unwrap_or_default()
 }
 
 fn ssh_survey(args: &[String], lang: Lang) -> Connected {
