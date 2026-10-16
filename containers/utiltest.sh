@@ -21,16 +21,20 @@ esac
 PAGE=${PREFIX}amnezia-wg-status:latest
 NODE=awg-util-node
 PAGE_C=awg-util-page
+# A network of its own: on the default bridge a container name does not
+# resolve, and awg-under is pointed at the page by name.
+UNET=awg-util-net
 FAIL=0
 
 hr()    { printf '\n===== %s =====\n' "$*"; }
 check() { if [ "$1" = 0 ]; then echo "  PASS  $2"; else echo "  FAIL  $2"; FAIL=1; fi; }
-cleanup() { docker rm -f "$NODE" "$PAGE_C" >/dev/null 2>&1; }
+cleanup() { docker rm -f "$NODE" "$PAGE_C" >/dev/null 2>&1; docker network rm "$UNET" >/dev/null 2>&1; }
 trap cleanup EXIT
 cleanup
+docker network create "$UNET" >/dev/null || exit 1
 
 hr "a node with no tunnel says so"
-docker run -d --name "$NODE" --cap-add NET_ADMIN --entrypoint sleep "$IMG" 600 >/dev/null || exit 1
+docker run -d --name "$NODE" --network "$UNET" --cap-add NET_ADMIN --entrypoint sleep "$IMG" 600 >/dev/null || exit 1
 out=$(docker exec "$NODE" awg-health 2>&1); rc=$?
 echo "$out"
 [ "$rc" != 0 ]; check $? "awg-health fails when there is no interface"
@@ -59,9 +63,10 @@ docker exec "$NODE" awg-health >/dev/null 2>&1; rc=$?
 [ "$rc" != 0 ]; check $? "awg-health still fails when nothing answers on UAPI"
 
 hr "awg-under: a page that answers is the answer"
-docker run -d --name "$PAGE_C" "$PAGE" >/dev/null || exit 1
+docker run -d --name "$PAGE_C" --network "$UNET" "$PAGE" >/dev/null || exit 1
 sleep 3
-node_ip=$(docker inspect -f '{{.NetworkSettings.IPAddress}}' "$NODE")
+# Through .Networks: Docker 29 dropped the top-level IPAddress field.
+node_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$NODE")
 out=$(docker exec "$NODE" awg-under "$PAGE_C" 2>&1); rc=$?
 echo "$out"
 [ "$rc" = 0 ] && grep -q 'under the VPN: http://' <<< "$out"; check $? "awg-under passes when the page answers"
