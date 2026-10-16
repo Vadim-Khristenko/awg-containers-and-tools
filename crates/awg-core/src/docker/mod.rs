@@ -40,6 +40,7 @@
 
 pub mod diagnose;
 pub mod discover;
+pub mod dns;
 pub mod faults;
 pub mod health;
 pub mod host;

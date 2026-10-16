@@ -36,6 +36,7 @@ fn main() {
         Some("hosts") => cmd_hosts(&args, lang),
         Some("check") | Some("lint") => cmd_check(&args, lang),
         Some("sets") => cmd_sets(&args, lang),
+        Some("dns") => ops::cmd_dns(&args, lang),
         Some("peer") | Some("peers") => ops::cmd_peer(&args, lang),
         Some("status") => ops::cmd_status(&args, lang),
         Some("logs") => ops::cmd_logs(&args, lang),
@@ -195,6 +196,8 @@ fn usage(lang: Lang) {
         "  awg-tool peer add <label> [ip] [--out FILE] [--vpn] [--mihomo] | list | rm <label|pubkey>"
     );
     println!("      {}", t(lang, K::CmdPeer));
+    println!("  awg-tool dns [status] | block|unblock|allow|unallow NAME | query NAME");
+    println!("      {}", t(lang, K::CmdDns));
     println!("  awg-tool status [--server NAME | --host ADDR]");
     println!("      {}", t(lang, K::CmdStatus));
     println!("  awg-tool doctor [CONTAINER]");

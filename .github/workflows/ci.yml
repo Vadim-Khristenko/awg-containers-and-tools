@@ -61,7 +61,7 @@ jobs:
       - name: Every script is executable
         run: |
           bad=$(git ls-files -s containers/ \
-            | awk '$1 != "100755" && ($4 ~ /\.sh$/ || $4 ~ /awg-(peer|uapi|health|under|leak)$/) { print $4 }')
+            | awk '$1 != "100755" && ($4 ~ /\.sh$/ || $4 ~ /awg-(peer|uapi|health|under|leak|dns-list)$/) { print $4 }')
           if [ -n "$bad" ]; then
             echo "not executable in the index:"; echo "$bad"
             echo "fix with: git update-index --chmod=+x <file>"
@@ -71,7 +71,7 @@ jobs:
 
       - name: Shell syntax
         run: |
-          for f in $(git ls-files 'containers/**' | grep -E '\.sh$|awg-(peer|uapi|health|under|leak)$'); do
+          for f in $(git ls-files 'containers/**' | grep -E '\.sh$|awg-(peer|uapi|health|under|leak|dns-list)$'); do
             bash -n "$f" || exit 1
           done
           echo "all parse"

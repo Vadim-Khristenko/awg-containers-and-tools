@@ -658,6 +658,93 @@ pub fn cmd_peer(args: &[String], lang: Lang) {
     }
 }
 
+/// `awg-tool dns [status] | block|unblock|allow|unallow NAME | query NAME`:
+/// the tunnel's resolver, on whichever host `status` would pick.
+pub fn cmd_dns(args: &[String], lang: Lang) {
+    use awg_core::docker::dns::{self, List};
+    use awg_core::docker::image::Generation;
+
+    let at = args.iter().position(|a| a == "dns").map_or(0, |i| i + 1);
+    let mut words = Vec::new();
+    let mut it = args[at..].iter();
+    while let Some(a) = it.next() {
+        if crate::VALUE_FLAGS.contains(&a.as_str()) {
+            it.next();
+        } else if !a.starts_with("--") {
+            words.push(a.as_str());
+        }
+    }
+    let sub = words.first().copied().unwrap_or("status");
+    let name = words.get(1).copied();
+    if !matches!(
+        sub,
+        "status" | "block" | "unblock" | "allow" | "unallow" | "query"
+    ) || (sub != "status" && name.is_none())
+    {
+        eprintln!("awg-tool dns [status] | block|unblock|allow|unallow NAME | query NAME");
+        std::process::exit(2);
+    }
+
+    let (conn, found) = survey(args, lang);
+    let host = conn.host();
+    let resolver = match flag(args, "--container") {
+        Some(n) => found.iter().find(|c| c.name == n),
+        None => found
+            .iter()
+            .find(|c| c.generation == Some(Generation::Dns) && c.state.is_running()),
+    };
+    let Some(resolver) = resolver else {
+        fail(t(lang, K::MsgNoResolver).into());
+    };
+
+    let edit = |list, add| match dns::edit(&host, &resolver.name, list, name.unwrap_or(""), add) {
+        Ok(msg) => {
+            println!("{msg}");
+            eprintln!("{}", t(lang, K::MsgDnsReloads));
+        }
+        Err(e) => fail(e.to_string()),
+    };
+    match sub {
+        "block" => edit(List::Block, true),
+        "unblock" => edit(List::Block, false),
+        "allow" => edit(List::Allow, true),
+        "unallow" => edit(List::Allow, false),
+        "query" => match dns::query(&host, &resolver.name, name.unwrap_or("")) {
+            Ok(lines) if lines.is_empty() => println!("{}", t(lang, K::MsgNoAnswer)),
+            Ok(lines) => lines.iter().for_each(|l| println!("{l}")),
+            Err(e) => fail(e.to_string()),
+        },
+        _ => match dns::status(&host, &resolver.name) {
+            Ok(s) => {
+                println!("● {}  ({} {})", resolver.name, t(lang, K::LblMode), s.mode);
+                println!(
+                    "  {} {}   {} {}",
+                    t(lang, K::LblBlocked),
+                    s.blocked,
+                    t(lang, K::LblAllowed),
+                    s.allowed
+                );
+                if !s.managed_block.is_empty() {
+                    println!("  block: {}", s.managed_block.join(", "));
+                }
+                if !s.managed_allow.is_empty() {
+                    println!("  allow: {}", s.managed_allow.join(", "));
+                }
+                if let Some(q) = s.stat("total.num.queries") {
+                    let hits = s.stat("total.num.cachehits").unwrap_or(0);
+                    let share = (hits * 100).checked_div(q).unwrap_or(0);
+                    println!(
+                        "  {} {q}, {} {share}%",
+                        t(lang, K::LblQueries),
+                        t(lang, K::LblCacheHits)
+                    );
+                }
+            }
+            Err(e) => fail(e.to_string()),
+        },
+    }
+}
+
 /// A client config holds its private key: readable by its owner only.
 fn write_private(path: &str, text: &str) -> std::io::Result<()> {
     std::fs::write(path, text)?;

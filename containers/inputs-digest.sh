@@ -22,7 +22,7 @@ target="${1:?usage: inputs-digest.sh <target> <go-tag>}"
 gotag="${2:--}"
 
 if [ "$target" = dns ]; then
-    files="Dockerfile.dns unbound.conf entrypoint-dns.sh"
+    files="Dockerfile.dns unbound.conf entrypoint-dns.sh awg-dns-list"
 elif [ "$target" = status ]; then
     files="Dockerfile.status status-www/index.html status-www/architect.css status-www/app.js status-www/whoami.sh status-www/httpd.conf"
 else

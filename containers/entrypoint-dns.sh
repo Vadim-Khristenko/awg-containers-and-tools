@@ -33,6 +33,9 @@ FORWARD="${AWG_DNS_FORWARD:-1.1.1.1@853#cloudflare-dns.com 9.9.9.9@853#dns.quad9
 REFRESH="${AWG_DNS_REFRESH:-86400}"
 IPV6="${AWG_DNS_IPV6:-0}"
 NAMES="${AWG_DNS_NAMES:-/var/lib/awg-names/names.hosts}"
+# Where `awg-tool dns block|allow` writes: a volume of its own, since the
+# operator directory is usually mounted read-only.
+MANAGED="${AWG_DNS_MANAGED:-/var/lib/awg-dns}"
 SELF="${AWG_DNS_ADDRESS:-172.29.172.254}"
 STATUS="${AWG_DNS_STATUS_ADDRESS:-172.29.172.253}"
 TTL=60
@@ -121,8 +124,8 @@ generate() {
         : > "$blocked"
         : > "$allowed"
     else
-        names_from "$CONF_DIR"/blocklists.d/* "$LEGACY_BLOCK_DIR"/* "$RUN"/lists/*.txt | sort -u > "$blocked"
-        names_from "$CONF_DIR"/allowlist.d/* | sort -u > "$allowed"
+        names_from "$CONF_DIR"/blocklists.d/* "$LEGACY_BLOCK_DIR"/* "$RUN"/lists/*.txt "$MANAGED"/block.txt | sort -u > "$blocked"
+        names_from "$CONF_DIR"/allowlist.d/* "$MANAGED"/allow.txt | sort -u > "$allowed"
     fi
 
     {
@@ -252,7 +255,11 @@ trap 'kill -TERM "$pid" 2>/dev/null; wait "$pid"; exit 0' TERM INT
 reload() {
     unbound-control reload_keep_cache >/dev/null 2>&1 || unbound-control reload >/dev/null 2>&1 || true
 }
-stamp() { [ -r "$NAMES" ] && stat -c %Y "$NAMES" 2>/dev/null || echo 0; }
+# What the loop watches between refreshes: the peer names, the lists the
+# tool manages, and the operator directory itself.
+stamp() {
+    find "$NAMES" "$MANAGED" "$CONF_DIR" -type f 2>/dev/null | sort | xargs -r stat -c '%n %Y %s' 2>/dev/null | md5sum
+}
 last_names=$(stamp)
 since_fetch=0
 since_stats=0

@@ -1,0 +1,67 @@
+#!/bin/sh
+# The resolver's managed lists and its state, for `awg-tool dns` and for an
+# operator at the container's shell.
+#
+#   awg-dns-list status                  mode, counts, the managed lists, stats
+#   awg-dns-list add  block|allow NAME   put a name on a list
+#   awg-dns-list rm   block|allow NAME   take it off
+#   awg-dns-list query NAME              what this resolver answers for NAME
+#
+# The lists live on the resolver's own volume; entrypoint-dns.sh watches them
+# and reloads within a few seconds, so nothing here restarts anything.
+set -eu
+
+MANAGED="${AWG_DNS_MANAGED:-/var/lib/awg-dns}"
+RUN="${AWG_DNS_RUN:-/run/awg-dns}"
+
+die() { printf '!! %s\n' "$*" >&2; exit 1; }
+
+# Letters, digits, - and _, dot separated, at least one dot.
+name_ok() {
+    printf '%s' "$1" | grep -Eq '^[a-z0-9_-]+(\.[a-z0-9_-]+)+$'
+}
+
+list_file() {
+    case "$1" in
+        block) echo "$MANAGED/block.txt" ;;
+        allow) echo "$MANAGED/allow.txt" ;;
+        *) die "no list '$1': block or allow" ;;
+    esac
+}
+
+case "${1:-}" in
+    status)
+        g="$RUN/generated.conf"
+        if grep -q '^forward-zone:' "$g" 2>/dev/null; then echo mode=forward; else echo mode=recursive; fi
+        echo "blocked=$(grep -c always_nxdomain "$g" 2>/dev/null || true)"
+        echo "allowed=$(cat "$RUN/allowed.txt" 2>/dev/null | wc -l | tr -d ' ')"
+        sed 's/^/block:/' "$MANAGED/block.txt" 2>/dev/null || true
+        sed 's/^/allow:/' "$MANAGED/allow.txt" 2>/dev/null || true
+        sed 's/^/stat:/' "$RUN/stats" 2>/dev/null || true
+        ;;
+    add|rm)
+        [ $# -eq 3 ] || die "usage: awg-dns-list $1 block|allow NAME"
+        f=$(list_file "$2")
+        n=$(printf '%s' "$3" | tr 'A-Z' 'a-z' | sed 's/\.$//')
+        name_ok "$n" || die "'$3' is not a domain name"
+        touch "$f"
+        if [ "$1" = add ]; then
+            grep -qxF "$n" "$f" || echo "$n" >> "$f"
+            echo "added $n to the $2 list"
+        else
+            grep -vxF "$n" "$f" > "$f.new" || true
+            mv -f "$f.new" "$f"
+            echo "removed $n from the $2 list"
+        fi
+        ;;
+    query)
+        [ $# -eq 2 ] || die "usage: awg-dns-list query NAME"
+        n=$(printf '%s' "$2" | tr 'A-Z' 'a-z')
+        name_ok "$n" || die "'$2' is not a domain name"
+        nslookup "$n" 127.0.0.1 2>&1 || true
+        ;;
+    *)
+        printf 'usage: awg-dns-list {status | add|rm block|allow NAME | query NAME}\n' >&2
+        exit 2
+        ;;
+esac

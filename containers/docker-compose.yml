@@ -42,6 +42,8 @@ services:
       # - ./dns:/etc/awg-dns:ro
       # The node's peer names, for <label>.peer.vpn. No keys in it.
       - awg-names:/var/lib/awg-names:ro
+      # What `awg-tool dns block|allow` writes, kept across restarts.
+      - awg-dns-state:/var/lib/awg-dns
     networks:
       dns:
         ipv4_address: 172.29.172.254
@@ -128,6 +130,7 @@ volumes:
   awg-state:
   awg-log:
   awg-names:
+  awg-dns-state:
 
 # The client side of the DNS arrangement, for the config this pair uses:
 #

@@ -180,6 +180,10 @@ strings! {
         "issue, list and revoke peers on a node, here or over SSH",
         "выдать, показать и отозвать пиров на узле, здесь или по SSH"
     ),
+    CmdDns => (
+        "the tunnel's resolver: state, block and allow lists, lookups",
+        "резолвер туннеля: состояние, списки блокировки и разрешения, запросы"
+    ),
     CmdHosts => (
         "hosts the mimicry profiles may name, by role and region",
         "хосты, которые могут называть профили мимикрии, по ролям и регионам"
@@ -211,6 +215,20 @@ strings! {
     ),
     MsgCheckClean => ("nothing to report", "замечаний нет"),
     MsgWrote => ("written to", "записано в"),
+    MsgNoResolver => (
+        "no resolver container here (vaiprog/amnezia-wg-dns); --container names one",
+        "здесь нет контейнера резолвера (vaiprog/amnezia-wg-dns); --container укажет его"
+    ),
+    MsgDnsReloads => (
+        "the resolver picks it up within a few seconds, no restart",
+        "резолвер подхватит это за несколько секунд, без перезапуска"
+    ),
+    MsgNoAnswer => ("no answer", "ответа нет"),
+    LblMode => ("mode", "режим"),
+    LblBlocked => ("blocked", "заблокировано"),
+    LblAllowed => ("allowed", "разрешено"),
+    LblQueries => ("queries", "запросов"),
+    LblCacheHits => ("from cache", "из кэша"),
     MsgSaved => ("saved the set", "набор сохранён:"),
     MsgRemoved => ("removed the set", "набор удалён:"),
     MsgNoSets => (
