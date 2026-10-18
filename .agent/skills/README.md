@@ -1,7 +1,7 @@
 # Навыки для AI-агентов
 
 Этот каталог содержит проектную справку в формате Agent Skills: `SKILL.md`
-с YAML-полями `name`/`description`, дополнительные материалы — в `references/`.
+с YAML-полями `name`/`description`, дополнительные материалы в `references/`.
 Исполняемых файлов и новых скриптов здесь нет; инструкции используют
 существующие `awg-tool`, `awg-peer` и Docker Compose.
 
@@ -9,7 +9,7 @@
 
 | Навык | Область |
 |---|---|
-| [awg-operations](awg-operations/SKILL.md) | Установка CLI и серверов по SSH/Compose, конфигурации AWG 1.0–3.1, добавление и отзыв клиентов, DNS, диагностика, обновление и резервирование |
+| [awg-operations](awg-operations/SKILL.md) | Установка CLI и серверов по SSH и Compose, конфигурации AWG 1.0-3.1, выдача и отзыв клиентов, смена обфускации, резолвер туннеля и страницы .vpn, диагностика, обновление и резервирование |
 
 ## Как пользоваться
 
@@ -24,20 +24,23 @@
 
 Например:
 
-- «Подготовь установку AWG 3.0 на VPS по SSH; Docker ещё не установлен».
+- «Подготовь установку AWG 3.1 на VPS по SSH; Docker ещё не установлен».
 - «Добавь телефон на существующий сервер; нужен весь IPv4-трафик через VPN».
 - «Handshake есть, но DNS и `amiunder.vpn` не открываются; сначала диагностика».
+- «Нужны домены `.geek` через туннель, остальное как было».
 
 ## Поддержка актуальности
 
 При изменении CLI, образов или формата конфигурации обновляйте соответствующий
 раздел навыка вместе с кодом. Источники истины перечислены в справке; особенно
-важны `crates/awg-cli/src/main.rs`, `crates/awg-core/src/versions.rs`,
-`crates/awg-core/src/deploy/`, `containers/entrypoint.sh`, `containers/awg-peer`
-и `containers/docker-compose.yml`.
+важны `crates/awg-cli/src/main.rs`, `crates/awg-cli/src/ops.rs`,
+`crates/awg-core/src/versions.rs`, `crates/awg-core/src/deploy/`,
+`crates/awg-core/src/docker/`, `containers/entrypoint.sh`,
+`containers/entrypoint-dns.sh`, `containers/awg-peer` и
+`containers/docker-compose.yml`.
 
 В `awg-operations/evals/evals.json` находятся сценарии проверки ответов агента.
-Они не запускают VPN, не требуют секретов и не заменяют live tunnel tests
+Они не запускают VPN, не требуют секретов и не заменяют живые тесты туннелей
 проекта. Для проверки навыка дайте одинаковый запрос агенту со справкой и без
 неё, сравните команды, безопасность и полноту действий. Результаты прогонов и
 HTML-отчёты храните вне рабочего дерева, не внося их в контрибьют.
