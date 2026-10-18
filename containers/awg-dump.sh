@@ -3,7 +3,7 @@
 # not working" moments.
 #
 #   awg-dump              # everything, to stdout
-#   awg-dump > dump.txt   # the usual way — it is made for pasting
+#   awg-dump > dump.txt   # the usual way: it is made for pasting
 #
 # What goes in: interface state, routes and rules, the UAPI view of the device
 # (peers, handshakes, transfer counters), the NAT rules, and the tail of the
@@ -11,13 +11,13 @@
 # because the bug is usually in how two of them disagree.
 #
 # What never goes in, and this is the point of the script rather than a nice
-# extra: private keys and preshared keys. A bundle is made to leave the node —
-# pasted into an issue, attached to a message, read by whoever helps today.
+# extra: private keys, preshared keys and the 3.x header-protection key. A
+# bundle is made to leave the node: pasted into an issue, attached to a message, read by whoever helps today.
 # The UAPI dump is filtered the same way the event log is: a public key
 # identifies a peer perfectly well, and nothing here needs a secret.
 #
 # Sections that fail (no NAT rules, no event log yet) print a marker and move
-# on — a broken node rarely breaks every source the same way, and the dump is
+# on: a broken node rarely breaks every source the same way, and the dump is
 # most useful exactly when the node is at its worst.
 set -u
 
@@ -41,9 +41,20 @@ echo "--- rules ---"
 ip rule show 2>&1
 
 hr "device (UAPI get=1, keys redacted)"
-# private_key and preshared_key are the only lines the daemon sends in clear;
-# everything else — endpoints, handshakes, counters — is public by nature.
-awg-uapi get "$IFACE" 2>&1 | grep -vE '^(private_key|preshared_key)=' || echo "(UAPI did not answer)"
+# private_key and preshared_key are dropped. header_protection_key is a secret
+# both ends share, and anyone holding it can take the 3.x headers apart, so it
+# is reduced to whether it is set and how long it is, as awg-tool reports it.
+# Everything else (endpoints, handshakes, counters) is public by nature.
+out=$(awg-uapi get "$IFACE" 2>&1) || out=
+if [ -n "$out" ]; then
+    printf '%s\n' "$out" | awk -F= '
+        $1 == "private_key" || $1 == "preshared_key" { next }
+        $1 == "header_protection_key" { printf "%s=<set, %d bytes>\n", $1, length($2) / 2; next }
+        { print }
+    '
+else
+    echo "(UAPI did not answer)"
+fi
 
 hr "firewall (rules naming $IFACE)"
 iptables -S 2>/dev/null | grep "$IFACE" || echo "(no rules naming $IFACE)"

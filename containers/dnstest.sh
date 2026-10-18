@@ -399,6 +399,14 @@ within 40 '! docker exec "$DNS" pgrep -f awg-dns-chain >/dev/null'
 check $? "taking chain.conf away stops the chain"
 within 20 'grep -qE "^Address: [0-9]" <<< "$(ask www.wikipedia.org)"'
 check $? "...and the resolver answers on its own again"
+# awg-dump is made to be pasted somewhere: no key may survive it, the 3.x
+# header-protection key included.
+out_dump=$(docker exec "$SRV" awg-dump 2>&1)
+grep -qE '^(private_key|preshared_key)=|^header_protection_key=[0-9a-f]{16}' <<< "$out_dump"; [ $? != 0 ]
+check $? "awg-dump carries no private, preshared or header-protection key"
+case "$V" in 3.*) grep -q '^header_protection_key=<set, 32 bytes>' <<< "$out_dump"
+                  check $? "...and says the header-protection key is set, and how long" ;;
+esac
 # awg-watch on the server: the loop the entrypoint started is there, and a
 # quick one with a five-second threshold sees the client go quiet, come back
 # when its tunnel restarts, and go quiet again.
