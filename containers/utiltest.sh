@@ -69,6 +69,15 @@ out=$(docker exec "$NODE" awg-leak 2>&1)
 echo "$out" | grep '^ipv6'
 grep -q '^ipv6.*via awg0: the tunnel' <<< "$out"; check $? "...and passes it once ::/0 and the route go into the tunnel"
 
+# A full tunnel set up the way the entrypoint does it: a table of its own
+# picked by fwmark, the main table's default route left where it was. That
+# is a correct tunnel, and awg-leak must say so rather than read the main
+# table and call it a leak.
+docker exec "$NODE" sh -c 'ip route add default dev awg0 table 51820 && ip rule add not fwmark 51820 table 51820 && ip rule add table main suppress_prefixlength 0'
+out=$(docker exec "$NODE" awg-leak 2>&1)
+echo "$out" | grep '^default'
+grep -q '^default.*via awg0: the tunnel' <<< "$out"; check $? "awg-leak follows the policy rules of a full tunnel"
+docker exec "$NODE" sh -c 'ip rule del table main suppress_prefixlength 0; ip rule del not fwmark 51820 table 51820; ip route flush table 51820' >/dev/null 2>&1
 # The interface is there now, so this is the other half of the health check:
 # up does not mean answering.
 docker exec "$NODE" awg-health >/dev/null 2>&1; rc=$?

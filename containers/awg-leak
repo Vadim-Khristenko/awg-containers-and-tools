@@ -107,23 +107,36 @@ if [ "$ours" = 1 ]; then
     fi
 fi
 
-# 8. Where the default routes go. Only meaningful on a full tunnel, so the
-#    config is what decides whether each is a finding.
-default=$(ip route show default 2>/dev/null | awk 'NR==1{print $3, $5}') || true
+# 8. Where traffic to the internet actually goes. Asked of the kernel with
+#    `ip route get` for a public address, which follows the policy rules: a
+#    full tunnel routes through a table of its own selected by fwmark, and the
+#    main table's default route, still pointing at the old path, is not the
+#    one used. Nothing is sent; it is a lookup. Only meaningful on a full
+#    tunnel, so the config is what decides whether each is a finding.
+via() { awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }'; }
+gw() { awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }'; }
+probe4="${AWG_LEAK_PROBE4:-1.1.1.1}"
+probe6="${AWG_LEAK_PROBE6:-2606:4700:4700::1111}"
+r4=$(ip route get "$probe4" 2>/dev/null | head -1) || true
+dev4=$(printf '%s' "$r4" | via)
+default="${dev4:-none}"
+gw4=$(printf '%s' "$r4" | gw)
+[ -n "$gw4" ] && default="$gw4 $default"
 if [ "$full" = 1 ]; then
-    case " ${default:-} " in
-        *" $IFACE ") line default "via $IFACE: the tunnel" ;;
-        *)          line default "${default:-none}: not the tunnel"; LEAK=1 ;;
-    esac
+    if [ "$dev4" = "$IFACE" ]; then
+        line default "via $IFACE: the tunnel"
+    else
+        line default "$default: not the tunnel"; LEAK=1
+    fi
 else
-    line default "${default:-none} (not a full tunnel, so this is expected)"
+    line default "$default (not a full tunnel, so this is expected)"
 fi
 
 # IPv6 is where a full IPv4 tunnel most often leaks: a config with 0.0.0.0/0
 # and no ::/0 leaves every IPv6 connection on the old path.
-v6=$(ip -6 route show default 2>/dev/null | awk 'NR==1 { for (i = 1; i < NF; i++) if ($i == "dev") print $(i + 1) }') || true
+v6=$(ip -6 route get "$probe6" 2>/dev/null | head -1 | via) || true
 if [ -z "$v6" ]; then
-    line ipv6 "no IPv6 default route: nothing to leak"
+    line ipv6 "no IPv6 route out: nothing to leak"
 elif [ "$v6" = "$IFACE" ]; then
     line ipv6 "via $IFACE: the tunnel"
 elif [ "$full6" = 1 ] || [ "$full" = 1 ]; then
