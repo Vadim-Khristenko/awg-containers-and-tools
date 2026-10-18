@@ -5,7 +5,7 @@ resolver = "2"
 members = ["crates/awg-core", "crates/awg-cli", "containers/dns-chain"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.90"   # edition 2024 needs 1.85; 1.90 is the floor we actually test against
 license = "MIT"
