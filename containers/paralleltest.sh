@@ -32,7 +32,10 @@ declare -A IMG=(
 declare -A IFACE=([1.0]=awg1 [1.5]=awg15 [2.0]=awg2 [3.0]=awg3 [3.1]=awg31)
 declare -A PORT=( [1.0]=51821 [1.5]=51822 [2.0]=51823 [3.0]=51824 [3.1]=51825)
 declare -A TUN=(  [1.0]=10.201 [1.5]=10.202 [2.0]=10.203 [3.0]=10.204 [3.1]=10.205)
-declare -A XNET=( [1.0]=172.30.11 [1.5]=172.30.12 [2.0]=172.30.13 [3.0]=172.30.14 [3.1]=172.30.15)
+# AWG_TEST_XNET picks the first two octets of the transport nets, for a host
+# whose own docker networks already hold 172.30.0.0/16.
+X="${AWG_TEST_XNET:-172.30}"
+declare -A XNET=( [1.0]=$X.11 [1.5]=$X.12 [2.0]=$X.13 [3.0]=$X.14 [3.1]=$X.15)
 
 WORK=
 AWG_TOOL=${AWG_TOOL:-$(dirname "$0")/../target/debug/awg-tool}
