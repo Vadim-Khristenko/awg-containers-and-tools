@@ -29,7 +29,7 @@ jobs:
       # properly — but a run that is about to spend forty minutes on live
       # tunnels should not die on chmod.
       - name: Make sure the scripts are runnable
-        run: chmod +x containers/*.sh containers/awg-peer containers/awg-uapi containers/awg-health containers/awg-under containers/awg-leak
+        run: chmod +x containers/*.sh containers/status-www/*.sh containers/awg-peer containers/awg-uapi containers/awg-health containers/awg-under containers/awg-leak containers/awg-mtu containers/awg-watch containers/awg-dns-list
 
       # The self test drives the tunnel through awg-tool, and the binary has
       # to exist before the first tunnel comes up. This was the quiet killer
@@ -57,3 +57,8 @@ jobs:
 
       - name: DNS leak protection
         run: cd containers && sudo ./dnstest.sh
+
+      # 1.5 runs on a patched daemon (containers/patches) whose bug showed up
+      # here first, and 3.1 is the generation with the most to check.
+      - name: DNS, the pages and the chain on 1.5 and 3.1
+        run: cd containers && sudo ./dnstest.sh 1.5 && sudo ./dnstest.sh 3.1
