@@ -34,8 +34,9 @@ cloud security group/NAT проверяются отдельно, без рис�
 ## Получение awg-tool
 
 Для опубликованного релиза выбери бинарник под платформу на странице Releases
-**этого** репозитория (`awg-tool-linux-amd64`, `awg-tool-linux-arm64`, сборки
-для Windows и macOS). Скачай checksum-файл, проверь SHA-256, затем разреши
+**этого** репозитория. Имена по платформе: `awg-tool-x86_64-unknown-linux-gnu`,
+`awg-tool-aarch64-unknown-linux-gnu`, `awg-tool-aarch64-apple-darwin`,
+`awg-tool-x86_64-pc-windows-msvc.exe`. Скачай checksum-файл, проверь SHA-256, затем разреши
 исполнение и установи бинарник в каталог из PATH. Не угадывай URL и номер
 последнего релиза. Пример проверки:
 

@@ -101,7 +101,7 @@ Connection profiles are saved so the second run is `--server NAME`. Passwords on
 
 ### Where the binary comes from
 
-There are published binaries for every release since `0.3.0`: `awg-tool-linux-amd64`, `awg-tool-linux-arm64`, Windows and macOS builds, plus checksums. If you would rather build it yourself:
+There are published binaries for every release since `0.3.0`, named by target: `awg-tool-x86_64-unknown-linux-gnu`, `awg-tool-aarch64-unknown-linux-gnu`, `awg-tool-aarch64-apple-darwin` and `awg-tool-x86_64-pc-windows-msvc.exe`, plus a checksum file. If you would rather build it yourself:
 
 ```bash
 cargo build --release            # needs Rust 1.90+, edition 2024

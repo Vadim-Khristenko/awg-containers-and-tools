@@ -101,7 +101,7 @@ awg-tool install --host 203.0.113.9 --user root --key ~/.ssh/id_ed25519
 
 ### Откуда взять бинарник
 
-Начиная с `0.3.0` к каждому релизу прикладываются бинарники: `awg-tool-linux-amd64`, `awg-tool-linux-arm64`, сборки для Windows и macOS и контрольные суммы. Если хотите собрать сами:
+Начиная с `0.3.0` к каждому релизу прикладываются бинарники, названные по платформе: `awg-tool-x86_64-unknown-linux-gnu`, `awg-tool-aarch64-unknown-linux-gnu`, `awg-tool-aarch64-apple-darwin` и `awg-tool-x86_64-pc-windows-msvc.exe`, и файл контрольных сумм. Если хотите собрать сами:
 
 ```bash
 cargo build --release            # нужен Rust 1.90+, edition 2024
