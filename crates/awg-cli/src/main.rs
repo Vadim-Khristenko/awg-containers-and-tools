@@ -543,9 +543,11 @@ fn cmd_gen(args: &[String], lang: Lang) {
         obj.insert("version".into(), serde_json::json!(version.as_str()));
         obj.insert("profile".into(), serde_json::json!(profile.id()));
         let mut map = serde_json::Map::new();
-        for l in &lines {
-            if let Some((k, v)) = l.split_once(" = ") {
-                map.insert(k.to_string(), serde_json::json!(v));
+        // `.conf` lines are `Key = value`, UAPI lines `key=value`; comments
+        // carry neither.
+        for l in lines.iter().filter(|l| !l.starts_with('#')) {
+            if let Some((k, v)) = l.split_once(" = ").or_else(|| l.split_once('=')) {
+                map.insert(k.trim().to_string(), serde_json::json!(v.trim()));
             }
         }
         obj.insert("params".into(), serde_json::Value::Object(map));
@@ -562,8 +564,10 @@ fn cmd_gen(args: &[String], lang: Lang) {
     match flag_value(args, "--out") {
         // Warnings stay on stderr either way, so a pipe and a file carry the
         // same content and the operator still hears about anything odd.
+        // Owner-only: a 3.x block carries the HeaderProtectionKey, a secret
+        // both ends share.
         Some(path) => {
-            std::fs::write(&path, body + "\n").unwrap_or_else(|e| {
+            ops::write_private(&path, &(body + "\n")).unwrap_or_else(|e| {
                 eprintln!("awg-tool: cannot write {path}: {e}");
                 std::process::exit(1);
             });
