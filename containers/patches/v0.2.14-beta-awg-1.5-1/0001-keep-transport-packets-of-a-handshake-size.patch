@@ -1,0 +1,35 @@
+From: Vadim Khristenko <vadim.khristenko@gmail.com>
+Subject: [PATCH] device: keep transport packets that line up with a handshake size
+
+ProcessAWGPacket returned an error when a packet of a handshake message's
+size carried no magic header, which is what every transport packet of that
+size looks like, and RoutineReceiveIncoming dropped it. The fallback to the
+transport path below was meant for this case and was only reached when the
+ciphertext happened to match another header.
+---
+diff --git a/device/device.go b/device/device.go
+index fdb8620..f195e40 100644
+--- a/device/device.go
++++ b/device/device.go
+@@ -882,15 +882,16 @@ func (device *Device) ProcessAWGPacket(size int, packet *[]byte, buffer *[MaxMes
+ 	// transport size can align with other header types;
+ 	// making sure we have the right actualMsgType
+ 	actualMsgType, err := device.getMsgType(packet, junkSize)
+-	if err != nil {
+-		return 0, fmt.Errorf("get msg type: %w", err)
+-	}
+-
+-	if actualMsgType == expectedMsgType {
++	if err == nil && actualMsgType == expectedMsgType {
+ 		*packet = (*packet)[junkSize:]
+ 		return actualMsgType, nil
+ 	}
+ 
++	// A transport packet whose size lines up with a handshake message has
++	// ciphertext where that message's header would be, which almost never
++	// matches any magic header. Returning that error dropped the packet, so
++	// every transport packet of exactly those sizes was lost; it goes to the
++	// transport path instead, as it does in 1.0 and from 2.0 on.
+ 	device.log.Verbosef("awg: transport packet lined up with another msg type")
+ 
+ 	msgType, err := device.handleTransport(size, packet, buffer)

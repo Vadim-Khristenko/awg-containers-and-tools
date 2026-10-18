@@ -45,14 +45,14 @@ Configuration parsing error
 | Образ | Протокол | Основа |
 |---|---|---|
 | `vaiprog/amnezia-wg-1` | AWG 1.0 | amneziawg-go v0.2.12 |
-| `vaiprog/amnezia-wg-15` | AWG 1.5 | amneziawg-go v0.2.14-beta-awg-1.5-1 |
+| `vaiprog/amnezia-wg-15` | AWG 1.5 | amneziawg-go v0.2.14-beta-awg-1.5-1 и [одно исправление](containers/patches/README.md) |
 | `vaiprog/amnezia-wg-2` | AWG 2.0 | amneziawg-go v0.2.19 |
 | `vaiprog/amnezia-wg-3` | AWG 3.0 | amneziawg-go v3.0.20260805 |
 | `vaiprog/amnezia-wg-31` | AWG 3.1 | amneziawg-go v3.1.20260828 |
 | `vaiprog/amnezia-wg-dns` | | unbound и awg-dns-chain |
 | `vaiprog/amnezia-wg-status` | | собственные страницы туннеля |
 
-Все пять поколений работают на одном хосте рядом, не мешая друг другу. Каждый образ собран для `amd64` и `arm64`: на втором работает большинство плат, на которых люди реально держат туннели.
+Последний тег 1.5 отбрасывает каждый транспортный пакет, размер которого совпал с размером сообщения рукопожатия, а новых тегов этой линии upstream не выпустит, поэтому образ 1.5 несёт [один небольшой патч](containers/patches/README.md), который такие пакеты сохраняет. Все пять поколений работают на одном хосте рядом, не мешая друг другу. Каждый образ собран для `amd64` и `arm64`: на втором работает большинство плат, на которых люди реально держат туннели.
 
 ---
 

@@ -45,14 +45,14 @@ Images are published on Docker Hub under [`vaiprog`](https://hub.docker.com/u/va
 | Image | Protocol | Built on |
 |---|---|---|
 | `vaiprog/amnezia-wg-1` | AWG 1.0 | amneziawg-go v0.2.12 |
-| `vaiprog/amnezia-wg-15` | AWG 1.5 | amneziawg-go v0.2.14-beta-awg-1.5-1 |
+| `vaiprog/amnezia-wg-15` | AWG 1.5 | amneziawg-go v0.2.14-beta-awg-1.5-1, plus [one fix](containers/patches/README.md) |
 | `vaiprog/amnezia-wg-2` | AWG 2.0 | amneziawg-go v0.2.19 |
 | `vaiprog/amnezia-wg-3` | AWG 3.0 | amneziawg-go v3.0.20260805 |
 | `vaiprog/amnezia-wg-31` | AWG 3.1 | amneziawg-go v3.1.20260828 |
 | `vaiprog/amnezia-wg-dns` | | unbound and awg-dns-chain |
 | `vaiprog/amnezia-wg-status` | | the tunnel's own pages |
 
-All five tunnel generations run side by side on one host without stepping on each other. Every image is published for `amd64` and `arm64`, the latter being what most boards people actually run tunnels on speak.
+The last 1.5 tag drops every transport packet that happens to be the size of a handshake message, and upstream will not tag that line again, so the 1.5 image carries [one small patch](containers/patches/README.md) that keeps them. All five tunnel generations run side by side on one host without stepping on each other. Every image is published for `amd64` and `arm64`, the latter being what most boards people actually run tunnels on speak.
 
 ---
 

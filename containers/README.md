@@ -9,6 +9,7 @@ not in theirs.
 | file | what it does |
 |---|---|
 | `Dockerfile` / `build.sh` | the five protocol images, one build arg apart |
+| `patches/` | our fixes to a daemon tag upstream will not release again (1.5) |
 | `entrypoint.sh` | `.conf` to UAPI, addresses, routes, NAT, event log, node facts |
 | `awg-peer` | add, list and revoke peers, issue client configs, write peer names |
 | `awg-uapi` | raw `get=1` and arbitrary requests against the socket |
@@ -51,7 +52,7 @@ things to keep in sync.
 | image                     | AWG | size   | `amneziawg-go` | what that tag adds                                        |
 |---------------------------|-----|--------|----------------|-----------------------------------------------------------|
 | `vaiprog/amnezia-wg-1`    | 1.0 | 33.3 MB | `v0.2.12`      | Jc/Jmin/Jmax, S1/S2, fixed H1-H4                          |
-| `vaiprog/amnezia-wg-15`   | 1.5 | 34.1 MB | `v0.2.14-beta-awg-1.5-1` | + I1-I5 special junk (`<b> <c> <t> <r> <wt>` only), `Itime` |
+| `vaiprog/amnezia-wg-15`   | 1.5 | 34.1 MB | `v0.2.14-beta-awg-1.5-1` + [patch](patches/README.md) | + I1-I5 special junk (`<b> <c> <t> <r> <wt>` only), `Itime` |
 | `vaiprog/amnezia-wg-2`    | 2.0 | 33.4 MB | `v0.2.19`      | + S3/S4, H1-H4 as ranges, `<rc> <rd> <d> <ds> <dz>` chain tags |
 | `vaiprog/amnezia-wg-3`    | 3.0 | 33.4 MB | `v3.0.20260805` | + HeaderProtectionKey, ContentPaddingAddition, timer ranges |
 | `vaiprog/amnezia-wg-31`   | 3.1 | 33.4 MB | `v3.1.20260828` | + RandomTrailers and DisableCookies |
@@ -115,6 +116,8 @@ tag, not by reading release notes:
 * `v3.1.x` adds `random_trailers` and `disable_cookies`. Pinned at
   `v3.1.20260828`, the tag that fixes RandomTrailers panicking on a cookie
   reply and DisableCookies not disabling the whole underload.
+
+The 1.5 tag is built with [one patch](patches/README.md): it drops every transport packet of a handshake message's size, which showed up as a tunnel that handshakes and pings but loses the DNS and TCP traffic it forwards. Upstream rewrote that path in 2.0 and will not tag 1.5 again.
 
 The tools the image builds come from `amneziawg-tools` and are pinned at
 `v3.1.20260812`, which knows the 3.x keys; they are used for key material and

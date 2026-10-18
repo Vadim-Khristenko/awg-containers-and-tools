@@ -29,6 +29,7 @@ hr() { printf '\n===== %s =====\n' "$*"; }
 hr "node"
 echo "protocol: ${AWG_PROTOCOL:-unknown}"
 echo "daemon:   $(amneziawg-go --version 2>/dev/null | head -1 || echo 'unknown')"
+echo "patches:  $(tr '\n' ' ' < /usr/share/awg/patches 2>/dev/null | sed 's/ *$//' | grep . || echo none)"
 echo "uptime:   $(cat /proc/uptime 2>/dev/null | cut -d' ' -f1 || echo '?')s"
 echo "date:     $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 

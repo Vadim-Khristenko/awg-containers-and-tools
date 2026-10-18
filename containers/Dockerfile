@@ -26,7 +26,17 @@ FROM golang:1.26-alpine AS build
 ARG AWG_GO_VERSION
 RUN apk add --no-cache git make bash gcc musl-dev linux-headers
 WORKDIR /src
+# Our own fixes to a daemon tag upstream will not touch again, kept as plain
+# patches under patches/<tag>/ and applied in order. Today that is the 1.5 line
+# only, whose last tag drops transport packets of a handshake message's size;
+# see patches/README.md. The names of what was applied go into the image.
+COPY patches/ /patches/
 RUN git clone --depth 1 --branch ${AWG_GO_VERSION} https://github.com/amnezia-vpn/amneziawg-go.git . \
+ && : > /out-patches \
+ && for p in /patches/${AWG_GO_VERSION}/*.patch; do \
+        [ -f "$p" ] || continue; \
+        git apply --verbose "$p" && basename "$p" >> /out-patches; \
+    done \
  && make \
  && install -m 0755 amneziawg-go /out-awg-go
 
@@ -81,6 +91,7 @@ LABEL org.opencontainers.image.title="AmneziaWG ${AWG_VERSION} node (unofficial)
 # shell into the image" exactly when the node is at its worst.
 RUN apk add --no-cache bash iptables ip6tables iproute2 conntrack-tools socat dumb-init tcpdump curl
 COPY --from=build /out-awg-go /usr/bin/amneziawg-go
+COPY --from=build /out-patches /usr/share/awg/patches
 COPY --from=tools /out-awg    /usr/bin/awg
 COPY entrypoint.sh /usr/bin/entrypoint.sh
 COPY awg-uapi      /usr/bin/awg-uapi
