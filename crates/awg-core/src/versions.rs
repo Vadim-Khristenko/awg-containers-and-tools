@@ -324,9 +324,9 @@ const fn on(
     }
 }
 
-const GO_NO_TAG_C: &str = "The tunnel is amneziawg-go, which has no <c>: its vocabulary is <b>, \
-     <t>, <r>, <rc>, <rd>, <d>, <ds>, <dz>. The packet counter exists only in the Linux kernel \
-     module.";
+const GO_NO_TAG_C: &str = "The tunnel is amneziawg-go, whose chain parser from AWG 2.0 on has no <c>: \
+     its vocabulary is <b>, <t>, <r>, <rc>, <rd>, <d>, <ds>, <dz>, and the packet counter exists \
+     only in the Linux kernel module. The 1.5 parser it replaced did read <c>.";
 const ENGINE_UNVERIFIED: &str = "The engine that reads I1-I5 here could not be established from \
      source, so only the tags both known engines understand are used; <c> is withheld.";
 
