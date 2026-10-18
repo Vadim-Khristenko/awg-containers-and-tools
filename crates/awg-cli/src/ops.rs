@@ -843,6 +843,108 @@ pub fn cmd_rotate(args: &[String], lang: Lang) {
         }
     }
 }
+/// `awg-tool servers [list] | add NAME --host ADDR [...] | rm NAME`: the saved
+/// connections that `--server NAME` and the servers screen use. A password is
+/// kept only with `--store-password`, in secrets.json beside the profiles,
+/// never in them.
+pub fn cmd_servers(args: &[String], lang: Lang) {
+    let at = args
+        .iter()
+        .position(|a| a == "servers")
+        .map_or(0, |i| i + 1);
+    let mut words = Vec::new();
+    let mut it = args[at..].iter();
+    while let Some(a) = it.next() {
+        if crate::VALUE_FLAGS.contains(&a.as_str()) {
+            it.next();
+        } else if !a.starts_with("--") {
+            words.push(a.as_str());
+        }
+    }
+    let dir = profile::default_config_dir().unwrap_or_else(|e| fail(e.to_string()));
+    let usage = || -> ! {
+        eprintln!(
+            "awg-tool servers [list] | add NAME --host ADDR [--user U] [--port P] \
+             [--key PATH [--key-passphrase] | --password [--store-password]] [--sudo] | rm NAME"
+        );
+        std::process::exit(2)
+    };
+    let name_ok = |n: &str| {
+        !n.is_empty()
+            && n.len() <= 64
+            && n.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+    };
+    match words.first().copied().unwrap_or("list") {
+        "list" | "ls" => {
+            let all = profile::load_all(&dir).unwrap_or_else(|e| fail(e.to_string()));
+            if all.is_empty() {
+                println!("{}", t(lang, K::MsgNoSavedProfiles));
+            }
+            for p in all {
+                println!(
+                    "{:<16} {}@{}:{}  {}{}",
+                    p.name,
+                    p.user,
+                    p.host,
+                    p.port,
+                    p.auth.label(),
+                    if p.sudo_required { "  sudo" } else { "" }
+                );
+            }
+        }
+        "add" => {
+            let Some(name) = words.get(1).copied().filter(|n| name_ok(n)) else {
+                usage()
+            };
+            let Some(host) = flag(args, "--host") else {
+                usage()
+            };
+            let mut p = remote::adhoc_profile(name, &host, args);
+            // Kept as an absolute path: a relative one would mean something
+            // else from every other directory the tool is run in.
+            if let profile::Auth::Key { path } | profile::Auth::KeyWithPassphrase { path } =
+                &mut p.auth
+                && let Ok(abs) = std::fs::canonicalize(&*path)
+            {
+                // Without Windows' verbatim prefix, which libssh2 does not read.
+                let plain = abs
+                    .to_string_lossy()
+                    .trim_start_matches(r"\\?\")
+                    .to_string();
+                *path = plain.into();
+            }
+            let store = args.iter().any(|a| a == "--store-password");
+            if store && !matches!(p.auth, profile::Auth::Password) {
+                fail(t(lang, K::ErrStoreWhat).into());
+            }
+            let secret = if store {
+                let prompt = format!("{} {}@{}: ", t(lang, K::PromptSecret), p.user, p.host);
+                Some(remote::ask_secret(&prompt).unwrap_or_else(|e| fail(e.to_string())))
+            } else {
+                None
+            };
+            profile::save(&dir, &p, secret.as_deref(), store)
+                .unwrap_or_else(|e| fail(e.to_string()));
+            println!(
+                "{} {name}: awg-tool status --server {name}",
+                t(lang, K::MsgServerSaved)
+            );
+        }
+        "rm" | "remove" => {
+            let Some(name) = words.get(1).copied() else {
+                usage()
+            };
+            match profile::remove(&dir, name) {
+                Ok(true) => println!("{} {name}", t(lang, K::MsgServerRemoved)),
+                Ok(false) => fail(format!("{}: {name}", t(lang, K::ErrNoSuchProfile))),
+                Err(e) => fail(e.to_string()),
+            }
+        }
+        _ => usage(),
+    }
+}
+
 /// A client config holds its private key: readable by its owner only.
 pub(crate) fn write_private(path: &str, text: &str) -> std::io::Result<()> {
     std::fs::write(path, text)?;

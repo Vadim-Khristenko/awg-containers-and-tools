@@ -240,7 +240,17 @@ strings! {
     MsgClientBlock => (
         "Every client replaces its obfuscation lines under [Interface] with these:",
         "Каждый клиент заменяет строки обфускации под [Interface] на эти:"
-    ),    CmdHosts => (
+    ),    CmdServers => (
+        "saved connections for --server NAME and the servers screen; a password only with --store-password",
+        "сохранённые подключения для --server ИМЯ и экрана серверов; пароль только с --store-password"
+    ),
+    MsgServerSaved => ("saved", "сохранено"),
+    MsgServerRemoved => ("removed", "удалено"),
+    ErrStoreWhat => (
+        "--store-password goes with --password: a key's passphrase is never kept",
+        "--store-password идёт вместе с --password: парольную фразу ключа инструмент не хранит"
+    ),
+    CmdHosts => (
         "hosts the mimicry profiles may name, by role and region",
         "хосты, которые могут называть профили мимикрии, по ролям и регионам"
     ),

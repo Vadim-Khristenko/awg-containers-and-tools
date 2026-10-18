@@ -40,6 +40,7 @@ fn main() {
         Some("dns") => ops::cmd_dns(&args, lang),
         Some("peer") | Some("peers") => ops::cmd_peer(&args, lang),
         Some("rotate") => ops::cmd_rotate(&args, lang),
+        Some("servers") => ops::cmd_servers(&args, lang),
         Some("status") => ops::cmd_status(&args, lang),
         Some("logs") => ops::cmd_logs(&args, lang),
         Some("doctor") | Some("diagnose") => ops::cmd_doctor(&args, lang),
@@ -206,6 +207,10 @@ fn usage(lang: Lang) {
     println!("      {}", t(lang, K::CmdDns));
     println!("  awg-tool under [HOST] [--resolver 172.29.172.254] [--timeout 3] [--json]");
     println!("      {}", t(lang, K::CmdUnder));
+    println!(
+        "  awg-tool servers [list] | add NAME --host ADDR [--user U] [--key PATH] [--sudo] | rm NAME"
+    );
+    println!("      {}", t(lang, K::CmdServers));
     println!("  awg-tool status [--server NAME | --host ADDR]");
     println!("      {}", t(lang, K::CmdStatus));
     println!("  awg-tool doctor [CONTAINER]");

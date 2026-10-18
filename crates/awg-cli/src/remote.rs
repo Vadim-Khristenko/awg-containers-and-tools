@@ -52,20 +52,7 @@ pub fn resolve(args: &[String], lang: Lang) -> Result<Target, String> {
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("{}: {name}", t(lang, K::ErrNoSuchProfile)))?
         }
-        (None, Some(host)) => {
-            let user = flag("--user").unwrap_or_else(|| "root".into());
-            let mut p = Profile::new("(ad hoc)", host, user);
-            if let Some(port) = flag("--port").and_then(|v| v.parse().ok()) {
-                p.port = port;
-            }
-            p.auth = match flag("--key") {
-                Some(path) => Auth::Key { path: path.into() },
-                None if args.iter().any(|a| a == "--password") => Auth::Password,
-                None => Auth::Agent,
-            };
-            p.sudo_required = args.iter().any(|a| a == "--sudo");
-            p
-        }
+        (None, Some(host)) => adhoc_profile("(ad hoc)", &host, args),
         (None, None) => {
             // Exactly one saved profile is not ambiguous, so do not make the
             // user name it. More than one, and guessing would be worse than
@@ -119,6 +106,36 @@ pub fn resolve(args: &[String], lang: Lang) -> Result<Target, String> {
         secret,
         sudo_password,
     })
+}
+
+/// A profile out of `--user`, `--port`, `--key` (with `--key-passphrase` when
+/// the key has one), `--password` and `--sudo`: what a one-off connection to
+/// `host` uses, and what `awg-tool servers add` keeps.
+pub fn adhoc_profile(name: &str, host: &str, args: &[String]) -> Profile {
+    let flag = |n: &str| {
+        args.iter()
+            .position(|a| a == n)
+            .and_then(|i| args.get(i + 1).cloned())
+    };
+    let has = |n: &str| args.iter().any(|a| a == n);
+    let user = flag("--user").unwrap_or_else(|| "root".into());
+    let mut p = Profile::new(name, host, user);
+    if let Some(port) = flag("--port").and_then(|v| v.parse().ok()) {
+        p.port = port;
+    }
+    p.auth = match flag("--key") {
+        Some(path) if has("--key-passphrase") => Auth::KeyWithPassphrase { path: path.into() },
+        Some(path) => Auth::Key { path: path.into() },
+        None if has("--password") => Auth::Password,
+        None => Auth::Agent,
+    };
+    p.sudo_required = has("--sudo");
+    p
+}
+
+/// Ask for a secret on the terminal without echoing it.
+pub fn ask_secret(label: &str) -> std::io::Result<String> {
+    prompt_secret(label)
 }
 
 /// The password `sudo -S` will need on this host, asked for only if it will.
