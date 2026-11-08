@@ -1001,7 +1001,8 @@ impl Servers {
 /// One line per node: enough to tell a working server from a sick one without
 /// opening anything.
 fn summarise(host: &Host, c: &Container, lang: Lang) -> String {
-    if !c.state.is_running() {
+    // The resolver and the status page have no tunnel to probe.
+    if !c.state.is_running() || c.generation.is_some_and(|g| g.awg().is_none()) {
         return c.state.as_str().to_string();
     }
     let iface = docker::inspect(host, &c.name)

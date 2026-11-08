@@ -158,7 +158,8 @@ pub fn cmd_status(args: &[String], lang: Lang) {
             println!("  ports   {}", ports.join(", "));
         }
 
-        if !c.state.is_running() {
+        // The resolver and the status page have no tunnel to probe.
+        if !c.state.is_running() || c.generation.is_some_and(|g| g.awg().is_none()) {
             continue;
         }
         let iface = docker::inspect(&host, &c.name)
