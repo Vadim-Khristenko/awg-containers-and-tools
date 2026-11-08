@@ -6,8 +6,8 @@ name: Release
 #     git push origin v0.2.0
 #
 # Images are pushed to Docker Hub only if both of these are configured:
-#   vars.DOCKERHUB_USERNAME     repository variable — the account (vaiprog)
-#   secrets.DOCKERHUB_TOKEN     repository secret   — token with Read/Write
+#   vars.DOCKERHUB_USERNAME     repository variable: the account (vaiprog)
+#   secrets.DOCKERHUB_TOKEN     repository secret:   a token with Read/Write
 # The username is a variable rather than a secret deliberately: it is not one,
 # and keeping it visible means the logs show which account was pushed to.
 # Without them the release still happens, with binaries but no images, and the
@@ -49,7 +49,7 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are not set — images will not be published."
+            echo "::warning::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are not set, so images will not be published."
           fi
 
   binaries:
@@ -179,7 +179,7 @@ jobs:
           docker buildx imagetools create \
             -t "${{ env.REGISTRY_USER }}/${{ matrix.image }}:${{ github.ref_name }}" \
             "${{ env.REGISTRY_USER }}/${{ matrix.image }}:latest"
-          echo "::notice::${{ matrix.image }} unchanged — tagged ${{ github.ref_name }} onto the existing digest"
+          echo "::notice::${{ matrix.image }} unchanged, tagged ${{ github.ref_name }} onto the existing digest"
 
       - name: Record what happened
         run: |
@@ -203,14 +203,14 @@ jobs:
 
   # The Docker Hub overview pages are pushed by their own workflow, `hub.yml`.
   # They were a job here until a 403 from Docker's login endpoint failed a
-  # release whose images had all published correctly — a release should be red
+  # release whose images had all published correctly. A release should be red
   # because something shipped wrong, not because a description did not update.
 
   release:
     name: GitHub release
     needs: [binaries, publish-images]
     # The publish job is skipped when there are no credentials, and a skipped
-    # dependency would skip this job too — so the condition is decided here.
+    # dependency would skip this job too, so the condition is decided here.
     if: always() && needs.binaries.result == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -235,7 +235,7 @@ jobs:
           merge-multiple: true
 
       # Named after the tag, so several releases downloaded into one directory
-      # do not overwrite each other's checksums — and so the verify command
+      # do not overwrite each other's checksums, and so the verify command
       # says which release it is verifying.
       #
       # Written outside the directory and moved in: `sha256sum * > file` in
@@ -274,14 +274,14 @@ jobs:
                 IFS='|' read -r image awg state digest < "$f"
                 case "$awg" in dns) proto="resolver" ;; *) proto="AWG $awg" ;; esac
                 case "$state" in
-                  unchanged) note="unchanged — re-tagged" ;;
+                  unchanged) note="unchanged, re-tagged" ;;
                   *)         note="rebuilt" ;;
                 esac
                 printf '| `%s/%s:%s` | %s | %s | `%s` |\n' \
                   "${REGISTRY_USER:-vaiprog}" "$image" "$TAG" "$proto" "$note" "${digest:0:19}"
               done
               echo
-              echo "Images marked *unchanged* are the same bytes as the previous release under a new tag — nothing to re-pull."
+              echo "Images marked *unchanged* are the same bytes as the previous release under a new tag: nothing to re-pull."
               echo
             else
               echo "## Images"
