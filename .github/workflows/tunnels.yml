@@ -42,10 +42,15 @@ jobs:
       - name: Build images
         run: cd containers && ./build.sh
 
-      # A handshake, ICMP both ways and a 4 MiB transfer with matching
-      # checksums, per generation. "It started" is not the same as "it works".
+      # A handshake, ICMP both ways, a 4 MiB transfer with matching checksums
+      # and a full-tunnel client, per generation. "It started" is not the same
+      # as "it works". Without an argument the script tests 3.0 only.
       - name: Self test
-        run: cd containers && sudo ./selftest.sh
+        run: |
+          cd containers
+          rc=0
+          for v in 1.0 1.5 2.0 3.0 3.1; do sudo ./selftest.sh "$v" || rc=1; done
+          exit "$rc"
 
       # The checks inside the images, on their own: a dummy interface and a
       # page, so this takes seconds and still proves they can say no.
