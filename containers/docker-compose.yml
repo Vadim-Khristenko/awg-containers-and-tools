@@ -81,6 +81,10 @@ services:
     networks:
       awg:
         ipv4_address: 172.31.99.10
+        # The default route must leave through this network, not the DNS one.
+        # Docker Engine 28+ takes the choice from here; on older engines leave
+        # the line out and check `ip route show default` in the container.
+        # gw_priority: 1
       # Joining both networks is the whole mechanism: the server is the only
       # thing on the DNS bridge besides the resolver.
       dns:

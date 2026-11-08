@@ -453,6 +453,21 @@ AllowedIPs = 10.99.0.0/24, 172.29.172.0/24
 The `/24` is what routes the query (and the pages beside the resolver) into the
 tunnel.
 
+The server sits on two networks and has one default route, and docker picks
+which network it goes through. When it picks the resolver's bridge, the
+tunnel's traffic leaves through that bridge rather than the one the UDP port is
+published on. Check with `docker exec awg-server ip route show default`; it
+should name the server's own network's gateway. Docker Engine 28 and newer take
+a priority for this on the service's network:
+
+```yaml
+    networks:
+      awg:
+        ipv4_address: 172.31.99.10
+        gw_priority: 1
+      dns:
+```
+
 ### How it resolves
 
 | `AWG_DNS_MODE` | |
