@@ -233,7 +233,8 @@ back if it does not come up.
 | `AWG_STATE_DIR` | `/var/lib/awg` | boot counter and `peers.d` |
 | `AWG_EVENT_LOG` | `/var/log/awg/events.log` | operational log, see below |
 | `AWG_EVENT_LOG_MAX_BYTES` | `262144` | rotate at this size; one old file kept |
-| `AWG_ENDPOINT` | `SERVER_PUBLIC_IP:<port>` | what `awg-peer` writes into issued configs |
+| `AWG_PUBLIC_HOST` | `SERVER_PUBLIC_IP` | the server's public name or address; `awg-peer` adds the `ListenPort` |
+| `AWG_ENDPOINT` | `$AWG_PUBLIC_HOST:<port>` | what `awg-peer` writes into issued configs, port included; wins over `AWG_PUBLIC_HOST` |
 | `AWG_CLIENT_DNS` | `172.29.172.254` | resolver for issued configs |
 | `AWG_SERVICES_NET` | the resolver's `/24` | the resolver and the pages, routed into the tunnel by issued configs |
 | `AWG_CLIENT_ALLOWED` | `<tunnel>/24, <services>/24` | `AllowedIPs` for issued configs |

@@ -165,6 +165,11 @@ EOF
     # Recorded after the config has been printed, so the log cannot claim an
     # issue that never reached the operator.
     awg_event client-config-issued "peer=$pub" "label=$label" "endpoint=$endpoint" "dns=$CLIENT_DNS"
+    # On stderr, so the config on stdout stays pasteable.
+    case "$endpoint" in
+        SERVER_PUBLIC_IP:*)
+            printf '!! the Endpoint is a placeholder: put the server address in it, or set AWG_PUBLIC_HOST on this node\n' >&2 ;;
+    esac
 }
 
 # --- list --------------------------------------------------------------------
