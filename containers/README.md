@@ -229,6 +229,7 @@ back if it does not come up.
 | `AWG_CONF` | `/etc/amnezia/awg/$AWG_IFACE.conf` | config path |
 | `AWG_NAT` | `auto` | `auto` = MASQUERADE when the config has a `ListenPort` |
 | `AWG_FWMARK` / `AWG_TABLE` | the `ListenPort` | only used for a `0.0.0.0/0` client |
+| `AWG_MSS` | `auto` | with NAT on, forwarded TCP is held to `MTU - 40` both ways, so a client that ignores the config's MTU still gets segments that fit; `off`, or a number |
 | `AWG_SOCK_DIR` | `/var/run/amneziawg` | UAPI socket directory |
 | `AWG_STATE_DIR` | `/var/lib/awg` | boot counter and `peers.d` |
 | `AWG_EVENT_LOG` | `/var/log/awg/events.log` | operational log, see below |

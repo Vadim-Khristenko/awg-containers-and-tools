@@ -107,6 +107,10 @@ for c in "$SRV" "$CLI"; do
     echo "$c set=1 -> $out"
     [ "$out" = "errno=0" ]; check $? "$c accepted the config"
 done
+# MTU 1280 above, so 1240 both ways: a client on a bigger MTU than its config
+# says still gets segments that fit.
+mss=$(docker exec "$SRV" iptables -t mangle -S FORWARD 2>/dev/null | grep -c -- '--set-mss 1240')
+[ "$mss" = 2 ]; check $? "server holds forwarded TCP to MSS 1240, both directions"
 echo "--- server get=1 ---"
 docker exec "$SRV" awg-uapi get 2>&1 | grep -vE '^(private_key|preshared_key)='
 

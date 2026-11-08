@@ -343,6 +343,35 @@ if [ "$do_nat" = 1 ]; then
         iptables -t nat -A POSTROUTING -s "$a" ! -o "$IFACE" -j MASQUERADE
     done
     log "NAT enabled, egress via ${OUT_IF:-?} (and any other non-tunnel link)"
+
+    # TCP through the tunnel is held to segments that fit this side's MTU,
+    # in both directions. A client that brings its interface up with an MTU of
+    # its own instead of the config's (AmneziaVPN on Windows has used 1376 for
+    # a 1280 config) otherwise gets connections that open and then stall on
+    # the first large segment, TLS first among them. AWG_MSS=off leaves TCP
+    # alone, a number sets the MSS outright.
+    mtu=${IF[MTU]:-1420}
+    case "${AWG_MSS:-auto}" in
+        off)        mss= ;;
+        auto|"")    mss=$((mtu - 40)) ;;
+        *[!0-9]*)   log "AWG_MSS=$AWG_MSS is not off, auto or a number; using auto"; mss=$((mtu - 40)) ;;
+        *)          mss=$AWG_MSS ;;
+    esac
+    if [ -n "$mss" ]; then
+        clamped=1
+        for dir in -i -o; do
+            iptables -t mangle -A FORWARD "$dir" "$IFACE" -p tcp --tcp-flags SYN,RST SYN \
+                -j TCPMSS --set-mss "$mss" 2>/dev/null || clamped=0
+            # IPv6 headers are 20 bytes longer. No ip6tables, no IPv6 to clamp.
+            ip6tables -t mangle -A FORWARD "$dir" "$IFACE" -p tcp --tcp-flags SYN,RST SYN \
+                -j TCPMSS --set-mss "$((mss - 20))" 2>/dev/null || true
+        done
+        if [ "$clamped" = 1 ]; then
+            log "TCP MSS through $IFACE held to $mss (AWG_MSS=off to leave it)"
+        else
+            log "could not clamp the TCP MSS (no TCPMSS target here?); large TCP segments rely on path MTU discovery"
+        fi
+    fi
 fi
 
 log "$IFACE is up"
