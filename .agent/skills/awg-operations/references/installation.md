@@ -41,7 +41,7 @@ cloud security group/NAT проверяются отдельно, без рис�
 последнего релиза. Пример проверки:
 
 ```bash
-sha256sum -c checksums-v0.5.0.sha256
+sha256sum -c checksums-v0.5.1.sha256
 ```
 
 Checksum проверяет целостность скачанного файла, не авторство: бинарники не

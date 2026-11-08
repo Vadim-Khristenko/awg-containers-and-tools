@@ -229,6 +229,7 @@ Docker. Домен в `Endpoint` резолвится при старте; см�
 | `AWG_CONF` | `/etc/amnezia/awg/${AWG_IFACE}.conf` | Смонтированный `.conf` |
 | `AWG_SOCK_DIR` | `/var/run/amneziawg` | Каталог UAPI-сокета |
 | `AWG_NAT` | `auto` | `on`/`off`; `auto` включает NAT при наличии `ListenPort` |
+| `AWG_MSS` | `auto` | С NAT держит MSS проходящего TCP под MTU туннеля (MTU минус 40); число задаёт своё значение, `off` выключает |
 | `AWG_FWMARK`, `AWG_TABLE` | `ListenPort`, иначе `51820` | Mark и table для маршрута по умолчанию клиента |
 | `AWG_STATE_DIR` | `/var/lib/awg` | Счётчик запусков и восстановление peers |
 | `AWG_PEERS_DIR` | см. ниже | Каталог записей динамических peers |
