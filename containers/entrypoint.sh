@@ -186,7 +186,10 @@ declare -a ALLOWED=()
 # Public keys only, so the startup log can name the peers it installed without
 # the peer loop ever holding a secret it might print.
 declare -a PEER_PUBS=()
-REQ+=("replace_peers=true")
+# Peer lines are collected apart from REQ: everything after the first
+# public_key belongs to a peer, and the device keys that depend on the peers
+# (fwmark) have to be written before it.
+declare -a PREQ=()
 for p in "${PEERS[@]}"; do
     declare -A P=()
     while IFS= read -r kv; do
@@ -196,25 +199,25 @@ for p in "${PEERS[@]}"; do
 
     # public_key opens a peer block in UAPI, so it must be emitted first.
     [ -n "${P[PublicKey]:-}" ] || die "peer without PublicKey in $CONF"
-    REQ+=("public_key=$(b64hex "${P[PublicKey]}")")
+    PREQ+=("public_key=$(b64hex "${P[PublicKey]}")")
     PEER_PUBS+=("${P[PublicKey]}")
 
     if [ -n "${P[PresharedKey]:-}" ]; then
-        REQ+=("preshared_key=$(b64hex "${P[PresharedKey]}")")
+        PREQ+=("preshared_key=$(b64hex "${P[PresharedKey]}")")
     fi
     if [ -n "${P[Endpoint]:-}" ]; then
-        REQ+=("endpoint=$(resolve_endpoint "${P[Endpoint]}")")
+        PREQ+=("endpoint=$(resolve_endpoint "${P[Endpoint]}")")
     fi
     if [ -n "${P[PersistentKeepalive]:-}" ]; then
-        REQ+=("persistent_keepalive_interval=${P[PersistentKeepalive]}")
+        PREQ+=("persistent_keepalive_interval=${P[PersistentKeepalive]}")
     fi
     if [ -n "${P[AllowedIPs]:-}" ]; then
-        REQ+=("replace_allowed_ips=true")
+        PREQ+=("replace_allowed_ips=true")
         IFS=',' read -ra _ips <<< "${P[AllowedIPs]}"
         for cidr in "${_ips[@]}"; do
             cidr=$(trim "$cidr")
             if [ -z "$cidr" ]; then continue; fi
-            REQ+=("allowed_ip=$cidr")
+            PREQ+=("allowed_ip=$cidr")
             ALLOWED+=("$cidr")
         done
     fi
@@ -222,12 +225,15 @@ for p in "${PEERS[@]}"; do
 done
 
 # A default route through the tunnel needs the fwmark trick, and the daemon has
-# to know the mark before we install the rules.
+# to know the mark before we install the rules. fwmark is a device key: after a
+# peer's lines amneziawg-go reads it as a peer key and rejects the whole set
+# with EINVAL, so it goes ahead of replace_peers.
 FULL_TUNNEL=0
 for cidr in ${ALLOWED[@]+"${ALLOWED[@]}"}; do
     case "$cidr" in 0.0.0.0/0|::/0) FULL_TUNNEL=1 ;; esac
 done
 if [ "$FULL_TUNNEL" = 1 ]; then REQ+=("fwmark=$FWMARK"); fi
+REQ+=("replace_peers=true" ${PREQ[@]+"${PREQ[@]}"})
 
 # --- apply -------------------------------------------------------------------
 if [ "${AWG_DUMP_REQUEST:-0}" = 1 ]; then
