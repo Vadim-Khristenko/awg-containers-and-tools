@@ -131,10 +131,12 @@ printf 'files.vpn A 172.29.172.250\n' > "$WORK/dns/vpn.d/test.records"
 chmod -R a+rX "$WORK/dns"
 docker volume create "$NAMESVOL" >/dev/null || exit 1
 
-# Run the way docker-compose.yml runs it: read-only, with its two tmpfs and its
-# state volume. A
-# resolver that only works writable is one the compose file cannot start.
+# Run the way docker-compose.yml runs it: read-only, every capability dropped
+# but the one that binds 53, with its two tmpfs and its state volume. A
+# resolver that only works writable or privileged is one the compose file
+# cannot start.
 docker run -d --name "$DNS" --network "$DNSNET" --ip "$RESOLVER" \
+    --cap-drop ALL --cap-add NET_BIND_SERVICE \
     --read-only --tmpfs /var/log/unbound --tmpfs /run/awg-dns:uid=100,gid=101 \
     -v "$WORK/blocklist.txt:/etc/unbound/blacklist.d/test.txt:ro" \
     -v "$WORK/dns:/etc/awg-dns:ro" \
@@ -367,12 +369,16 @@ mkdir -p "$WORK/alt/records.d" "$WORK/dns/forward.d"
 printf 'site.geek A 192.0.2.77\nother.geek A 192.0.2.78\niana.org A 0.0.0.0\nx.zone.test A 192.0.2.79\n' \
     > "$WORK/alt/records.d/test.records"
 chmod -R a+rX "$WORK/alt" "$WORK/dns"
+# Every capability dropped, NET_BIND_SERVICE too: the binary that carries it as
+# a file capability cannot even be executed then, and the resolver has to
+# start the copy without it.
 docker run -d --name "$ALT" --network "$DNSNET" --ip "$ALT_IP" --read-only \
+    --cap-drop ALL \
     --tmpfs /var/log/unbound --tmpfs /run/awg-dns:uid=100,gid=101 \
     -e AWG_DNS_MODE=forward -e AWG_DNS_FORWARD='192.0.2.1@853#nowhere.invalid' -e AWG_DNS_CANARY=none \
     -v "$WORK/alt:/etc/awg-dns:ro" "$DNSIMG" >/dev/null || exit 1
 within 20 'docker exec "$ALT" nslookup health.awg.internal 127.0.0.1 >/dev/null 2>&1'
-check $? "a read-only resolver without the public volume still starts and answers"
+check $? "a read-only resolver without the public volume or any capability still starts and answers"
 printf '%s\ndefault\n' "$ALT_IP" > "$WORK/dns/chain.conf"
 printf 'zone.test. %s\n' "$ALT_IP" > "$WORK/dns/forward.d/test.conf"
 chmod a+r "$WORK/dns/chain.conf" "$WORK/dns/forward.d/test.conf"

@@ -31,6 +31,7 @@ services:
   dns:
     image: vaiprog/amnezia-wg-dns:latest
     cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
     read_only: true
     tmpfs:
       - /var/log/unbound

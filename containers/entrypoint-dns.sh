@@ -234,8 +234,9 @@ write_inner() {
 
 INNER_PID= CHAIN_PID= RUNNING_CHAIN=
 
+# The inner resolver listens on 5301, so it never needs the capability.
 start_inner() {
-    /usr/sbin/unbound -d -p -c "$RUN/inner.conf" &
+    /usr/sbin/unbound-plain -d -p -c "$RUN/inner.conf" &
     INNER_PID=$!
 }
 
@@ -506,7 +507,26 @@ generate || true
 sync_chain
 publish
 
-/usr/sbin/unbound -d -p -c /etc/unbound/unbound.conf &
+# /usr/sbin/unbound binds 53 through a file capability, and the kernel refuses
+# to execute it (EPERM) when cap_net_bind_service is not in the bounding set,
+# which is what `cap_drop: [ALL]` without `cap_add: [NET_BIND_SERVICE]` leaves.
+# Docker lets any user bind low ports in a container's own network namespace
+# (ip_unprivileged_port_start=0), and then the copy without the capability
+# does the same job. Only when neither holds is there nothing to start.
+UNBOUND=/usr/sbin/unbound
+bnd=$(sed -n 's/^CapBnd:[[:space:]]*//p' /proc/self/status 2>/dev/null)
+if [ -n "$bnd" ] && [ $(( (0x$bnd >> 10) & 1 )) = 0 ]; then
+    low=$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || echo 1024)
+    if [ "$low" -le 53 ]; then
+        UNBOUND=/usr/sbin/unbound-plain
+        say "no NET_BIND_SERVICE in the bounding set; port 53 is unprivileged here, so the resolver runs without it"
+    else
+        say "cannot bind port 53: the container dropped NET_BIND_SERVICE and ports below $low are privileged here"
+        say "add cap_add: [NET_BIND_SERVICE] next to cap_drop: [ALL] (or --cap-add NET_BIND_SERVICE)"
+        exit 1
+    fi
+fi
+"$UNBOUND" -d -p -c /etc/unbound/unbound.conf &
 pid=$!
 trap 'stop_chain; kill -TERM "$pid" 2>/dev/null; wait "$pid"; exit 0' TERM INT
 

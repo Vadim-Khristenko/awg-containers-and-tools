@@ -24,6 +24,10 @@ services:
     restart: unless-stopped
     # It answers UDP/53 and needs no privileges to do it.
     cap_drop: [ALL]
+    # unbound binds 53 as its own user through this one capability. Without
+    # it the resolver still starts where docker makes low ports unprivileged
+    # (its default), and refuses to where it does not.
+    cap_add: [NET_BIND_SERVICE]
     read_only: true
     # The generated config, the downloaded lists and the stats live here; it
     # belongs to the unbound user (100:101) the image runs as.
