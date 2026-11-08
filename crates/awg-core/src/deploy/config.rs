@@ -892,9 +892,15 @@ mod tests {
         let link = crate::vpn::conf_to_vpn(&conf).unwrap();
         assert!(link.starts_with("vpn://"));
         let decoded = crate::vpn::decode(&link).unwrap();
-        let awg = &decoded["containers"][0]["awg"];
-        assert_eq!(awg["config"].as_str().unwrap(), conf);
-        assert_eq!(awg["Jc"].as_str().unwrap(), t.params.base.jc.to_string());
+        let last: serde_json::Value = serde_json::from_str(
+            decoded["containers"][0]["awg"]["last_config"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(last["config"].as_str().unwrap(), conf);
+        assert_eq!(last["Jc"].as_str().unwrap(), t.params.base.jc.to_string());
+        assert_eq!(crate::vpn::conf_from_link(&link).unwrap(), conf);
     }
 
     // ------------------------------------------------ once per server, not per client

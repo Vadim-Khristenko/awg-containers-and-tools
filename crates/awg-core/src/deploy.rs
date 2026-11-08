@@ -678,7 +678,7 @@ mod tests {
 
         let decoded = crate::vpn::decode(&result.vpn_link).unwrap();
         assert_eq!(
-            decoded["containers"][0]["awg"]["config"].as_str().unwrap(),
+            crate::vpn::conf_from_link(&result.vpn_link).unwrap(),
             result.client_conf
         );
         assert_eq!(decoded["hostName"].as_str().unwrap(), "95.85.30.7");
