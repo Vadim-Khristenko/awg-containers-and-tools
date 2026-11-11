@@ -1,0 +1,449 @@
+{
+  "source": "AmneziaWG Architect v4.5.2",
+  "sizeRules": [
+    {
+      "name": "S1 at soft max",
+      "params": {
+        "S1": 1132
+      },
+      "expected": []
+    },
+    {
+      "name": "S1 over soft max",
+      "params": {
+        "S1": 1133
+      },
+      "expected": [
+        {
+          "field": "S1",
+          "level": "warn",
+          "code": "awg.s_over_min_mtu",
+          "values": {
+            "key": "S1",
+            "value": 1133,
+            "max": 1132
+          }
+        }
+      ]
+    },
+    {
+      "name": "S2 at soft max",
+      "params": {
+        "S2": 1188
+      },
+      "expected": []
+    },
+    {
+      "name": "S2 over soft max",
+      "params": {
+        "S2": 1189
+      },
+      "expected": [
+        {
+          "field": "S2",
+          "level": "warn",
+          "code": "awg.s_over_min_mtu",
+          "values": {
+            "key": "S2",
+            "value": 1189,
+            "max": 1188
+          }
+        }
+      ]
+    },
+    {
+      "name": "S3 at soft max",
+      "params": {
+        "S3": 1216
+      },
+      "expected": []
+    },
+    {
+      "name": "S3 over soft max",
+      "params": {
+        "S3": 1217
+      },
+      "expected": [
+        {
+          "field": "S3",
+          "level": "warn",
+          "code": "awg.s_over_min_mtu",
+          "values": {
+            "key": "S3",
+            "value": 1217,
+            "max": 1216
+          }
+        }
+      ]
+    },
+    {
+      "name": "S1 at hard max",
+      "params": {
+        "S1": 65387
+      },
+      "expected": [
+        {
+          "field": "S1",
+          "level": "warn",
+          "code": "awg.s_over_min_mtu",
+          "values": {
+            "key": "S1",
+            "value": 65387,
+            "max": 1132
+          }
+        }
+      ]
+    },
+    {
+      "name": "S1 over hard max",
+      "params": {
+        "S1": 65388
+      },
+      "expected": [
+        {
+          "field": "S1",
+          "level": "error",
+          "code": "awg.size_max",
+          "values": {
+            "key": "S1",
+            "value": 65388,
+            "max": 65387
+          }
+        }
+      ]
+    },
+    {
+      "name": "S2 over hard max",
+      "params": {
+        "S2": 65444
+      },
+      "expected": [
+        {
+          "field": "S2",
+          "level": "error",
+          "code": "awg.size_max",
+          "values": {
+            "key": "S2",
+            "value": 65444,
+            "max": 65443
+          }
+        }
+      ]
+    },
+    {
+      "name": "S3 over hard max",
+      "params": {
+        "S3": 65472
+      },
+      "expected": [
+        {
+          "field": "S3",
+          "level": "error",
+          "code": "awg.size_max",
+          "values": {
+            "key": "S3",
+            "value": 65472,
+            "max": 65471
+          }
+        }
+      ]
+    },
+    {
+      "name": "S4 at 32",
+      "params": {
+        "S4": 32
+      },
+      "expected": []
+    },
+    {
+      "name": "S4 over 32",
+      "params": {
+        "S4": 33
+      },
+      "expected": [
+        {
+          "field": "S4",
+          "level": "warn",
+          "code": "awg.s4_large",
+          "values": {
+            "s4": 33,
+            "max": 32
+          }
+        }
+      ]
+    },
+    {
+      "name": "S4 zero",
+      "params": {
+        "S4": 0
+      },
+      "expected": [
+        {
+          "field": "S4",
+          "level": "warn",
+          "code": "awg.s4_zero"
+        }
+      ]
+    },
+    {
+      "name": "S1/S2 collision on 1.0",
+      "params": {
+        "S1": 10,
+        "S2": 66
+      },
+      "version": "1.0",
+      "expected": [
+        {
+          "field": "S2",
+          "level": "error",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S1",
+            "b": "S2"
+          }
+        }
+      ]
+    },
+    {
+      "name": "S1/S2 collision on 1.5",
+      "params": {
+        "S1": 10,
+        "S2": 66
+      },
+      "version": "1.5",
+      "expected": [
+        {
+          "field": "S2",
+          "level": "error",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S1",
+            "b": "S2"
+          }
+        }
+      ]
+    },
+    {
+      "name": "S1/S2 collision on 2.0",
+      "params": {
+        "S1": 10,
+        "S2": 66
+      },
+      "version": "2.0",
+      "expected": [
+        {
+          "field": "S2",
+          "level": "warn",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S1",
+            "b": "S2"
+          }
+        }
+      ]
+    },
+    {
+      "name": "S1/S2 collision on 3.0",
+      "params": {
+        "S1": 10,
+        "S2": 66
+      },
+      "version": "3.0",
+      "expected": [
+        {
+          "field": "S2",
+          "level": "warn",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S1",
+            "b": "S2"
+          }
+        }
+      ]
+    },
+    {
+      "name": "S1/S2 collision on 3.1",
+      "params": {
+        "S1": 10,
+        "S2": 66
+      },
+      "version": "3.1",
+      "expected": [
+        {
+          "field": "S2",
+          "level": "warn",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S1",
+            "b": "S2"
+          }
+        }
+      ]
+    },
+    {
+      "name": "S1/S2 collision on unknown",
+      "params": {
+        "S1": 10,
+        "S2": 66
+      },
+      "expected": [
+        {
+          "field": "S2",
+          "level": "warn",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S1",
+            "b": "S2"
+          }
+        }
+      ]
+    },
+    {
+      "name": "S1/S3 collision",
+      "params": {
+        "S1": 10,
+        "S3": 94
+      },
+      "version": "2.0",
+      "expected": [
+        {
+          "field": "S3",
+          "level": "warn",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S1",
+            "b": "S3"
+          }
+        }
+      ]
+    },
+    {
+      "name": "S2/S3 collision",
+      "params": {
+        "S2": 20,
+        "S3": 48
+      },
+      "version": "2.0",
+      "expected": [
+        {
+          "field": "S3",
+          "level": "warn",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S2",
+            "b": "S3"
+          }
+        }
+      ]
+    },
+    {
+      "name": "S3/S4 collision",
+      "params": {
+        "S3": 0,
+        "S4": 32
+      },
+      "version": "2.0",
+      "expected": [
+        {
+          "field": "S4",
+          "level": "warn",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S3",
+            "b": "S4"
+          }
+        }
+      ]
+    },
+    {
+      "name": "S2/S4 impossible under 32",
+      "params": {
+        "S2": 0,
+        "S4": 32
+      },
+      "version": "2.0",
+      "expected": []
+    },
+    {
+      "name": "three-way collision",
+      "params": {
+        "S1": 10,
+        "S2": 66,
+        "S3": 94
+      },
+      "version": "3.1",
+      "expected": [
+        {
+          "field": "S2",
+          "level": "warn",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S1",
+            "b": "S2"
+          }
+        },
+        {
+          "field": "S3",
+          "level": "warn",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S1",
+            "b": "S3"
+          }
+        },
+        {
+          "field": "S3",
+          "level": "warn",
+          "code": "awg.size_collision",
+          "values": {
+            "a": "S2",
+            "b": "S3"
+          }
+        }
+      ]
+    },
+    {
+      "name": "equal S never collide",
+      "params": {
+        "S1": 20,
+        "S2": 20,
+        "S3": 20,
+        "S4": 20
+      },
+      "version": "3.1",
+      "expected": []
+    }
+  ],
+  "mihomo": [
+    {
+      "version": "1.0",
+      "emitsVersion3": false,
+      "recentBuildHint": false,
+      "hasHeaderProtectionKey": false
+    },
+    {
+      "version": "1.5",
+      "emitsVersion3": false,
+      "recentBuildHint": false,
+      "hasHeaderProtectionKey": false
+    },
+    {
+      "version": "2.0",
+      "emitsVersion3": false,
+      "recentBuildHint": false,
+      "hasHeaderProtectionKey": false
+    },
+    {
+      "version": "3.0",
+      "emitsVersion3": true,
+      "recentBuildHint": true,
+      "hasHeaderProtectionKey": true
+    },
+    {
+      "version": "3.1",
+      "emitsVersion3": true,
+      "recentBuildHint": true,
+      "hasHeaderProtectionKey": true
+    }
+  ]
+}

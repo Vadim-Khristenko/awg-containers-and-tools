@@ -36,6 +36,7 @@ use crate::presets::DISABLED_HEADERS;
 use crate::render::{awg3_conf_lines, awg3_uapi_lines};
 use crate::rng::Rng;
 use crate::{Error, Result};
+use serde_json::json;
 
 /// Padding draw bounds (Architect `strategy.ts`, `index.ts`).
 pub const S_MAX: u32 = 150;
@@ -55,6 +56,13 @@ pub const JC_SLOW: u32 = 64;
 pub const S1_CEILING: u32 = 1280 - MESSAGE_INITIATION_SIZE;
 pub const S2_CEILING: u32 = 1280 - MESSAGE_RESPONSE_SIZE;
 pub const S3_CEILING: u32 = 1280 - MESSAGE_COOKIE_SIZE;
+
+/// The largest S whose padded message still fits one UDP datagram. Past it
+/// the daemon has nothing it can send.
+pub const S1_DATAGRAM_MAX: u32 = UDP_MAX - MESSAGE_INITIATION_SIZE;
+pub const S2_DATAGRAM_MAX: u32 = UDP_MAX - MESSAGE_RESPONSE_SIZE;
+pub const S3_DATAGRAM_MAX: u32 = UDP_MAX - MESSAGE_COOKIE_SIZE;
+const UDP_MAX: u32 = 65535;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AwgVersion {
@@ -579,6 +587,10 @@ pub struct Violation {
     /// The same finding in Russian, written beside the English at the place it
     /// is raised so the two cannot drift apart. `None` falls back to English.
     pub message_ru: Option<String>,
+    /// The numbers and names the message was built from, keyed as Architect
+    /// keys them (`{key, value, max}`, `{a, b}`), so a UI can rebuild the text
+    /// and `check --json` matches Architect's findings field for field.
+    pub values: Option<serde_json::Value>,
 }
 
 impl std::fmt::Display for Violation {
@@ -604,6 +616,7 @@ impl Violation {
             code,
             message: message.into(),
             message_ru: None,
+            values: None,
         }
     }
 
@@ -618,6 +631,7 @@ impl Violation {
             code,
             message: message.into(),
             message_ru: None,
+            values: None,
         }
     }
 
@@ -632,12 +646,20 @@ impl Violation {
             code,
             message: message.into(),
             message_ru: None,
+            values: None,
         }
     }
 
     /// Attach the Russian text.
     pub(crate) fn ru(mut self, text: impl Into<String>) -> Self {
         self.message_ru = Some(text.into());
+        self
+    }
+
+    /// The message in Russian when asked for and written, English otherwise.
+    /// Attach the numbers the message was built from.
+    pub(crate) fn values(mut self, values: serde_json::Value) -> Self {
+        self.values = Some(values);
         self
     }
 
@@ -1494,91 +1516,76 @@ pub fn validate_for(
 
     // ---- padding sizes
     let s = params.base.s;
-    // Past these a padded handshake message is larger than every path is
-    // required to carry.
-    for (i, max) in [(0usize, S1_CEILING), (1, S2_CEILING), (2, S3_CEILING)] {
-        if (i < 2 || v.supports_s3_s4()) && s[i] > max {
-            let (n, val) = (i + 1, s[i]);
+    // Past the hard maximum the padded message does not fit a datagram; past
+    // the ceiling it is larger than every path is required to carry. One
+    // finding per field, the worse of the two.
+    for (i, ceiling, max) in [
+        (0usize, S1_CEILING, S1_DATAGRAM_MAX),
+        (1, S2_CEILING, S2_DATAGRAM_MAX),
+        (2, S3_CEILING, S3_DATAGRAM_MAX),
+    ] {
+        if i == 2 && !v.supports_s3_s4() {
+            continue;
+        }
+        let (key, val) = (format!("S{}", i + 1), s[i]);
+        if val > max {
             out.push(
-                Violation::warn(
-                    format!("S{n}"),
-                    "s.over_min_mtu",
+                Violation::err(
+                    &key,
+                    "awg.size_max",
                     format!(
-                        "S{n} = {val} is past {max}: the padded message is larger than the 1280 \
-                         bytes every path must carry, and can fragment"
+                        "{key} = {val} is past {max}: the padded message does not fit a UDP \
+                         datagram, and the daemon cannot send it"
                     ),
                 )
                 .ru(format!(
-                    "S{n} = {val} больше {max}: дополненное сообщение не влезает в 1280 байт, \
-                     которые обязан пропускать любой путь, и может фрагментироваться"
-                )),
+                    "{key} = {val} больше {max}: дополненное сообщение не влезает в UDP \
+                     датаграмму, и демон не сможет его отправить"
+                ))
+                .values(json!({ "key": key, "value": val, "max": max })),
+            );
+        } else if val > ceiling {
+            out.push(
+                Violation::warn(
+                    &key,
+                    "awg.s_over_min_mtu",
+                    format!(
+                        "{key} = {val} is past {ceiling}: the padded message is larger than the \
+                         1280 bytes every path must carry, and can fragment"
+                    ),
+                )
+                .ru(format!(
+                    "{key} = {val} больше {ceiling}: дополненное сообщение не влезает в 1280 \
+                     байт, которые обязан пропускать любой путь, и может фрагментироваться"
+                ))
+                .values(json!({ "key": key, "value": val, "max": ceiling })),
             );
         }
     }
-    // Two message types padded to the same length. What that costs depends on
-    // the generation, read from each daemon's own config handling:
-    //
-    // * 1.0 (`device.go`, v0.2.12) refuses initiation and response of equal
-    //   size: it demultiplexes on size alone.
-    // * 1.5 (v0.2.14-beta-awg-1.5-1) refuses any two of the four sizes being
-    //   equal, for the same reason.
-    // * From 2.0 `DeterminePacketTypeAndPadding` checks the size and then the
-    //   magic header, so equal sizes still parse. They are one signal on the
-    //   wire where there should be two, and the Amnezia app's own server
-    //   settings refuse them (`isPacketSizeEqual`), so they are reported.
-    let sizes = [
-        ("S1", s[0] + MESSAGE_INITIATION_SIZE),
-        ("S2", s[1] + MESSAGE_RESPONSE_SIZE),
-        ("S3", s[2] + MESSAGE_COOKIE_SIZE),
-        ("S4", s[3] + MESSAGE_TRANSPORT_SIZE),
-    ];
-    let compared = if v == AwgVersion::V1_0 { 2 } else { 4 };
-    for i in 0..compared {
-        for j in (i + 1)..compared {
-            let ((a, la), (b, lb)) = (sizes[i], sizes[j]);
-            if la != lb {
-                continue;
-            }
-            let refused = v == AwgVersion::V1_0 || v == AwgVersion::V1_5;
-            let violation = if refused {
-                Violation::err(
-                    b,
-                    "s.size_collision",
-                    format!(
-                        "{a} and {b} pad two message types to the same {la} bytes, and the AWG \
-                         {v} daemon refuses the config"
-                    ),
-                )
-                .ru(format!(
-                    "{a} и {b} доводят два типа сообщений до одинаковых {la} байт, и демон AWG \
-                     {v} отвергает такой конфиг"
-                ))
-            } else {
-                Violation::warn(
-                    b,
-                    "s.size_collision",
-                    format!(
-                        "{a} and {b} pad two message types to the same {la} bytes: one signal on \
-                         the wire where there should be two, and the Amnezia app's server \
-                         settings refuse it"
-                    ),
-                )
-                .ru(format!(
-                    "{a} и {b} доводят два типа сообщений до одинаковых {la} байт: на проводе \
-                     один признак вместо двух, и настройки сервера в приложении Amnezia такое \
-                     не принимают"
-                ))
-            };
-            out.push(violation);
-        }
-    }
+    out.extend(size_collisions(s, v, true));
     if v.supports_s3_s4() {
         let s4 = s[3];
+        if s4 > MAX_S4 {
+            // Not a daemon limit (both engines read S4 as a plain uint16), but
+            // every transport packet carries it, so it costs throughput.
+            out.push(
+                Violation::warn(
+                    "S4",
+                    "awg.s4_large",
+                    format!("S4 = {s4} pads every data packet; past {MAX_S4} it costs throughput"),
+                )
+                .ru(format!(
+                    "S4 = {s4} добавляется к каждому пакету данных; больше {MAX_S4} это заметно \
+                     по скорости"
+                ))
+                .values(json!({ "s4": s4, "max": MAX_S4 })),
+            );
+        }
         if s4 > client.max_s4 {
             out.push(
                 Violation::err(
                     "S4",
-                    "client.s4_cap",
+                    "awg.s4_over_client",
                     format!(
                         "S4 = {s4} exceeds the maximum of {} for {}",
                         client.max_s4, client.name
@@ -1587,28 +1594,17 @@ pub fn validate_for(
                 .ru(format!(
                     "S4 = {s4} больше максимума {} для {}",
                     client.max_s4, client.name
-                )),
-            );
-        } else if s4 > MAX_S4 {
-            // Not a daemon limit (both engines read S4 as a plain uint16), but
-            // every transport packet carries it, so it costs throughput.
-            out.push(
-                Violation::warn(
-                    "S4",
-                    "s.s4_large",
-                    format!("S4 = {s4} pads every data packet; past {MAX_S4} it costs throughput"),
-                )
-                .ru(format!(
-                    "S4 = {s4} добавляется к каждому пакету данных; больше {MAX_S4} это заметно \
-                     по скорости"
-                )),
+                ))
+                .values(json!({ "s4": s4, "max": client.max_s4, "client": client.name })),
             );
         }
-        if s4 == 0 {
+        // Under a header key S4 = 0 is already refused for the nonce, and one
+        // finding on the field is enough.
+        if s4 == 0 && !headers_protected {
             out.push(
                 Violation::warn(
                     "S4",
-                    "s.zero",
+                    "awg.s4_zero",
                     "S4 = 0: transport packets are left unobfuscated",
                 )
                 .ru("S4 = 0: транспортные пакеты остаются без обфускации"),
@@ -1935,6 +1931,85 @@ pub fn validate_for(
         );
     }
 
+    out
+}
+
+/// Two message types padded to the same length. What that costs depends on
+/// the generation, read from each daemon's own config handling:
+///
+/// * 1.0 (`device.go`, v0.2.12) refuses initiation and response of equal
+///   size: it demultiplexes on size alone.
+/// * 1.5 (v0.2.14-beta-awg-1.5-1) refuses any two of the four sizes being
+///   equal, for the same reason.
+/// * From 2.0 `DeterminePacketTypeAndPadding` checks the size and then the
+///   magic header, so equal sizes still parse. They are one signal on the
+///   wire where there should be two, and the Amnezia app's own server
+///   settings refuse them (`isPacketSizeEqual`), so they are reported.
+///
+/// `known` is false when the generation was inferred from the file: a 1.x
+/// refusal is then a warning, as in Architect for an unknown version, since
+/// the same file runs on a later daemon.
+pub(crate) fn size_collisions(s: [u32; 4], v: AwgVersion, known: bool) -> Vec<Violation> {
+    let sizes = [
+        ("S1", s[0] + MESSAGE_INITIATION_SIZE),
+        ("S2", s[1] + MESSAGE_RESPONSE_SIZE),
+        ("S3", s[2] + MESSAGE_COOKIE_SIZE),
+        ("S4", s[3] + MESSAGE_TRANSPORT_SIZE),
+    ];
+    let compared = if v == AwgVersion::V1_0 { 2 } else { 4 };
+    let refused = matches!(v, AwgVersion::V1_0 | AwgVersion::V1_5);
+    let mut out = Vec::new();
+    for i in 0..compared {
+        for j in (i + 1)..compared {
+            let ((a, la), (b, lb)) = (sizes[i], sizes[j]);
+            if la != lb {
+                continue;
+            }
+            let violation = match (refused, known) {
+                (true, true) => Violation::err(
+                    b,
+                    "awg.size_collision",
+                    format!(
+                        "{a} and {b} pad two message types to the same {la} bytes, and the AWG \
+                         {v} daemon refuses the config"
+                    ),
+                )
+                .ru(format!(
+                    "{a} и {b} доводят два типа сообщений до одинаковых {la} байт, и демон AWG \
+                     {v} отвергает такой конфиг"
+                )),
+                (true, false) => Violation::warn(
+                    b,
+                    "awg.size_collision",
+                    format!(
+                        "{a} and {b} pad two message types to the same {la} bytes: an AWG 1.0 or \
+                         1.5 daemon refuses the config, a later one runs it with one signal on \
+                         the wire where there should be two"
+                    ),
+                )
+                .ru(format!(
+                    "{a} и {b} доводят два типа сообщений до одинаковых {la} байт: демон AWG \
+                     1.0 или 1.5 отвергает такой конфиг, более новый запускает, но на проводе \
+                     один признак вместо двух"
+                )),
+                (false, _) => Violation::warn(
+                    b,
+                    "awg.size_collision",
+                    format!(
+                        "{a} and {b} pad two message types to the same {la} bytes: one signal on \
+                         the wire where there should be two, and the Amnezia app's server \
+                         settings refuse it"
+                    ),
+                )
+                .ru(format!(
+                    "{a} и {b} доводят два типа сообщений до одинаковых {la} байт: на проводе \
+                     один признак вместо двух, и настройки сервера в приложении Amnezia такое \
+                     не принимают"
+                )),
+            };
+            out.push(violation.values(json!({ "a": a, "b": b })));
+        }
+    }
     out
 }
 
@@ -2529,9 +2604,13 @@ mod tests {
 
         let mut p = make(AwgVersion::V2_0, 1);
         p.base.s[2] = S3_CEILING;
-        assert_eq!(level(&p, "s.over_min_mtu"), None, "the ceiling itself fits");
+        assert_eq!(
+            level(&p, "awg.s_over_min_mtu"),
+            None,
+            "the ceiling itself fits"
+        );
         p.base.s[2] = S3_CEILING + 1;
-        assert_eq!(level(&p, "s.over_min_mtu"), Some(Level::Warn));
+        assert_eq!(level(&p, "awg.s_over_min_mtu"), Some(Level::Warn));
         assert_eq!(S1_CEILING + MESSAGE_INITIATION_SIZE, 1280);
     }
 
@@ -2547,7 +2626,7 @@ mod tests {
         assert!(found.iter().all(|v| v.code != "s.over_protocol_max"));
         assert!(
             s4.iter()
-                .any(|v| v.code == "client.s4_cap" && v.level == Level::Error),
+                .any(|v| v.code == "awg.s4_over_client" && v.level == Level::Error),
             "S4 = 40 is over every client's cap: {found:?}"
         );
         assert!(s4[0].message.contains("40"));
@@ -2583,7 +2662,7 @@ mod tests {
             f(&mut p.base.s);
             validate_for_client(&p, client("awg-kmod").unwrap())
                 .into_iter()
-                .find(|x| x.code == "s.size_collision")
+                .find(|x| x.code == "awg.size_collision")
                 .map(|x| (x.field, x.level))
         };
         let init_response = |s: &mut [u32; 4]| s[1] = s[0] + INIT_RESPONSE_DELTA;
@@ -2601,7 +2680,7 @@ mod tests {
             collision(AwgVersion::V3_0, &init_response).map(|c| c.1),
             Some(Level::Warn)
         );
-        // S4 + 32 against S3 + 64: the pair Architect did not check.
+        // S4 + 32 against S3 + 64, the pair Architect added in 4.5.2.
         let transport_cookie = |s: &mut [u32; 4]| {
             s[2] = 4;
             s[3] = 36;

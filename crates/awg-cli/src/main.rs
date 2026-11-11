@@ -911,6 +911,7 @@ fn cmd_check(args: &[String], lang: Lang) {
                     "code": f.code,
                     "message": f.message,
                     "message_ru": f.message_ru,
+                    "values": f.values,
                 })
             })
             .collect();
