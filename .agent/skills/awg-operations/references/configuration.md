@@ -1,54 +1,55 @@
-# Конфигурация, протоколы и сеть
+# Configuration, protocols and the network
 
-## Содержание
+## Contents
 
-- [Источники и выбор поколения](#источники-и-выбор-поколения)
-- [Генерация параметров](#генерация-параметров)
-- [Проверка готового конфига](#проверка-готового-конфига)
-- [Структура конфигураций](#структура-конфигураций)
-- [Переменные контейнера](#переменные-контейнера)
-- [DNS, страницы .vpn и маршрутизация](#dns-страницы-vpn-и-маршрутизация)
-- [Изменение настроек](#изменение-настроек)
+- [Sources and choosing a generation](#sources-and-choosing-a-generation)
+- [Generating parameters](#generating-parameters)
+- [Checking a finished config](#checking-a-finished-config)
+- [Config structure](#config-structure)
+- [Container variables](#container-variables)
+- [DNS, the .vpn pages and routing](#dns-the-vpn-pages-and-routing)
+- [Changing settings](#changing-settings)
 
-## Источники и выбор поколения
+## Sources and choosing a generation
 
-Пути в этом разделе отсчитываются от корня репозитория. Сверяй возможности с
-`crates/awg-core/src/versions.rs` и `crates/awg-core/src/engines.rs`, обработку
-`.conf` с `containers/entrypoint.sh`, топологию с
-`containers/docker-compose.yml`, резолвер с `containers/entrypoint-dns.sh`.
-Документация не заменяет код текущего checkout.
+Paths here are relative to the repository root. Check capabilities against
+`crates/awg-core/src/versions.rs` and `crates/awg-core/src/engines.rs`, `.conf`
+handling against `containers/entrypoint.sh`, the topology against
+`containers/docker-compose.yml`, the resolver against
+`containers/entrypoint-dns.sh`. The docs do not replace the code of the
+current checkout.
 
-| Версия | Образ | Набор параметров |
+| Version | Image | Parameters |
 |---|---|---|
-| 1.0 | `vaiprog/amnezia-wg-1` | `Jc/Jmin/Jmax`, `S1/S2`, фиксированные `H1-H4`; без `I1-I5` |
-| 1.5 | `vaiprog/amnezia-wg-15` | Дополнительно клиентские `I1-I5`; свой словарь тегов цепочек |
-| 2.0 | `vaiprog/amnezia-wg-2` | `S3/S4`, диапазоны H, новый словарь цепочек |
-| 3.0 | `vaiprog/amnezia-wg-3` | `HeaderProtectionKey`, `ContentPaddingAddition`, диапазоны таймеров |
-| 3.1 | `vaiprog/amnezia-wg-31` | Дополнительно `RandomTrailers`, `DisableCookies` |
+| 1.0 | `vaiprog/amnezia-wg-1` | `Jc/Jmin/Jmax`, `S1/S2`, fixed `H1-H4`; no `I1-I5` |
+| 1.5 | `vaiprog/amnezia-wg-15` | Adds client-side `I1-I5`; its own chain tag set |
+| 2.0 | `vaiprog/amnezia-wg-2` | `S3/S4`, H ranges, the new chain tag set |
+| 3.0 | `vaiprog/amnezia-wg-3` | `HeaderProtectionKey`, `ContentPaddingAddition`, timer ranges |
+| 3.1 | `vaiprog/amnezia-wg-31` | Adds `RandomTrailers`, `DisableCookies` |
 
-Это разные поколения протокола, а не взаимозаменяемые теги одного конфига.
-Выбирай поколение по реальной поддержке приложения на каждом устройстве, а не
-только по названию клиента. `--client` ограничивает генерируемые значения, но
-не обновляет приложение.
+These are different protocol generations, not interchangeable tags of one
+config. Choose the generation by what the app on every device really supports,
+not only by the client's name. `--client` limits the generated values; it does
+not update the app.
 
-Словари цепочек 1.5 и 2.0+ не вложены друг в друга:
+The 1.5 and 2.0+ chain tag sets do not nest:
 
-- 1.5 понимает `b c t r wt`; `<c>` и `<t>` уникальны в пределах цепочки.
-  Генератор не выпускает `wt`.
-- amneziawg-go 2.0+ понимает `b t r rc rd d ds dz`, но не `c`. Тег `<c>`
-  (счётчик пакетов) есть только в модуле ядра Linux; генератор использует
-  пересечение словарей движков на **обоих** концах (`--server-engine`, по
-  умолчанию `go`, то есть эти образы).
-- Не переносить `<rc>`/`<rd>` в 1.5 и не принуждать `<c>` в 2.0/3.x. Ошибка
-  `invalid i1: invalid tag: rc` требует верной версии генерации, а не удаления
-  всей обфускации.
-- В 1.5 цепочки отправляет клиент. Не делай вывод о сломанном соединении
-  только из отсутствия `I1-I5` на сервере.
+- 1.5 knows `b c t r wt`; `<c>` and `<t>` are unique within a chain. The
+  generator does not emit `wt`.
+- amneziawg-go 2.0+ knows `b t r rc rd d ds dz`, but not `c`. The `<c>` tag
+  (packet counter) exists only in the Linux kernel module; the generator uses
+  the intersection of the engines at **both** ends (`--server-engine`, default
+  `go`, which is these images).
+- Never carry `<rc>`/`<rd>` into 1.5 and never force `<c>` on 2.0/3.x. The
+  error `invalid i1: invalid tag: rc` needs the right generation, not removing
+  all obfuscation.
+- In 1.5 the client sends the chains. A server without `I1-I5` does not by
+  itself mean a broken connection.
 
-## Генерация параметров
+## Generating parameters
 
-Команды выполняются с установленным `awg-tool`; без установки используй
-`cargo run -p awg-cli --` вместо `awg-tool`.
+Commands assume an installed `awg-tool`; without it use
+`cargo run -p awg-cli --` instead of `awg-tool`.
 
 ```bash
 awg-tool profiles
@@ -59,84 +60,84 @@ awg-tool gen --version 3.0 --profile tls --region ru --whitelisted ru
 awg-tool gen --version 2.0 --client amneziawg-windows --client-release pre-2.0.2
 awg-tool gen --version 3.1 --uapi
 awg-tool gen --version 3.1 --mihomo
-awg-tool gen --version 3.1 --save phone      # сохранить набор настроек
-awg-tool gen --set phone                     # применить снова
+awg-tool gen --version 3.1 --save phone      # save a set of settings
+awg-tool gen --set phone                     # apply it again
 ```
 
-`gen` выдаёт блок обфускации, **не готовый сервер**, не ключевую пару клиента и
-не регистрацию peer. Новый запуск даёт новый набор. Для одной пары сгенерируй
-блок один раз и сохрани совпадающие параметры на обоих концах. Для работающего
-сервера не запускай новую генерацию ради добавления устройства: это
-рассинхронизирует его с остальными клиентами. Смена блока для всех сразу
-делается `awg-tool rotate` (см. [clients.md](clients.md)).
+`gen` prints an obfuscation block, **not a ready server**, not a client key
+pair and not a peer registration. Each run gives a new set. For one pair,
+generate the block once and keep matching parameters at both ends. Never run a
+new generation on a working server just to add a device: it breaks step with
+the other clients. Changing the block for everyone is `awg-tool rotate` (see
+[clients.md](clients.md)).
 
-`gen --host` это имя для пакетов мимикрии (например, SNI), а не SSH-адрес или
-`Endpoint`; в `install` то же самое называется `--mimic-host`. Без него имя
-берётся из базы примерно в 2400 хостов по роли и региону (`--region`,
-`--whitelisted`).
+`gen --host` is the name for mimicry packets (for example SNI), not an SSH
+address or an `Endpoint`; in `install` the same thing is `--mimic-host`.
+Without it the name comes from a database of about 2400 hosts by role and
+region (`--region`, `--whitelisted`).
 
-Профили: `quic`, `quic0rtt`, `tls`, `noise`, `dtls12`, `dtls13`, `http3`,
-`sip`, `tls-to-quic`, `quic-burst`, `dns`, `stun`, `random`. Актуальный перечень
-печатает `profiles`.
+Profiles: `quic`, `quic0rtt`, `tls`, `noise`, `dtls12`, `dtls13`, `http3`,
+`sip`, `tls-to-quic`, `quic-burst`, `dns`, `stun`, `random`. `profiles` prints
+the current list.
 
-Клиенты в матрице: `amneziawg-android`, `amneziawg-ios`, `amneziawg-windows`,
-`amneziavpn`, `wg-tunnel`, `wiresock`, `mihomo`, `opnsense`, `keenetic-native`,
-`wg-easy`, `awg-go-legacy`, `awg-kmod`, `openwrt`, `asus-merlin`. Перепроверь
-идентификатор через `clients`: имя в интерфейсе и CLI-id могут отличаться, и
-там же видны предупреждения по каждому клиенту.
+Clients in the matrix: `amneziawg-android`, `amneziawg-ios`,
+`amneziawg-windows`, `amneziavpn`, `wg-tunnel`, `wiresock`, `mihomo`,
+`opnsense`, `keenetic-native`, `wg-easy`, `awg-go-legacy`, `awg-kmod`,
+`openwrt`, `asus-merlin`. Check the id with `clients`: the UI name and the CLI
+id can differ, and the per-client warnings are listed there too.
 
-- У AmneziaWG Windows до сборки 2.0.2 H ограничены `2_147_483_647`: укажи
-  `--client-release pre-2.0.2`, если на устройстве старая сборка.
-- WireSock не отправляет `I1-I5` вовсе; конфиги для него их не содержат.
-  mihomo запускает 3.x только с `version: 3` (`gen --mihomo` его пишет).
-- Большие S4 и длинный junk-train увеличивают расход трафика, CPU и батареи.
-  Не включай `--extreme` для «починки» соединения без измерений.
-- `--junk` принимает 0..32, по умолчанию 5, но итог ограничивается версией и
-  клиентом. Проверяй выданный Jc, а не обещание по названию флага.
+- AmneziaWG Windows before build 2.0.2 limits H to `2_147_483_647`: pass
+  `--client-release pre-2.0.2` if the device has an old build.
+- WireSock does not send `I1-I5` at all; configs for it leave them out. mihomo
+  runs 3.x only with `version: 3` (`gen --mihomo` writes it).
+- A large S4 and a long junk train cost traffic, CPU and battery. Do not turn
+  on `--extreme` to "fix" a connection without measuring.
+- `--junk` takes 0..32, default 5, but the result is capped by version and
+  client. Check the Jc you got, not the flag's promise.
 
-### Переключатели и пресеты
+### Switches and presets
 
-Выбор `--version` применяет пресет версии, как это делает Any Tech ARCHITECT.
-Для 3.1: MTU 1280, `RandomTrailers` включён, H1-H4 = 1, 2, 3, 4
-(`--disable-h`), узкие окна H; `DisableCookies` выключен. Каждый переключатель
-принимает `on` или `off`, флаг без значения включает:
+Choosing `--version` applies that version's preset, the same way Any Tech
+ARCHITECT does. For 3.1: MTU 1280, `RandomTrailers` on, H1-H4 = 1, 2, 3, 4
+(`--disable-h`), narrow H windows; `DisableCookies` off. Every switch takes
+`on` or `off`, and a flag with no value turns it on:
 
 ```bash
 awg-tool gen --version 3.1 --random-trailers off --disable-h off
 awg-tool gen --version 3.0 --random-timings --content-padding off
 ```
 
-`--same-s` и `--disable-h` действуют только на 3.1 с включёнными защитой
-заголовков и хвостами. `DisableCookies` убирает защиту под нагрузкой и может
-нарушить NAT keepalive: не включай его автоматически. Старые версии молча
-игнорируют поля 3.1; не проверяй поддержку опции только по коду выхода.
+`--same-s` and `--disable-h` act only on 3.1 with header protection and
+trailers on. `DisableCookies` removes the under-load protection and can break
+NAT keepalive: never turn it on by default. Older versions silently ignore 3.1
+fields; do not judge support for an option by the exit code alone.
 
-Основные флаги `gen` и значения по умолчанию:
+Main `gen` flags and their defaults:
 
-| Флаг | По умолчанию | Смысл |
+| Flag | Default | Meaning |
 |---|---|---|
-| `--version` | `3.0` | Поколение протокола и его пресет |
-| `--profile` | `quic` | Мимикрия I1 |
-| `--client` | `amneziavpn` | Ограничения значений и тегов |
-| `--client-release` | текущая | Старая сборка клиента со своими ограничениями |
-| `--server-engine` | `go` | Что разбирает `I1-I5` на сервере |
+| `--version` | `3.0` | Protocol generation and its preset |
+| `--profile` | `quic` | I1 mimicry |
+| `--client` | `amneziavpn` | Value and tag limits |
+| `--client-release` | current | An old client build with its own limits |
+| `--server-engine` | `go` | What parses `I1-I5` on the server |
 | `--intensity` | `medium` | `low`/`medium`/`high` |
-| `--mtu` | `1500` | MTU пути для расчёта размеров; не задаёт MTU туннеля |
-| `--router` | выкл. | Умеренные junk/padding для слабого устройства |
-| `--browser` | не задан | Размеры пакетов браузера (chrome, edge, firefox, safari, ios, yandex-desktop, yandex-mobile, 360, qq) |
-| `--mimic-all` | выкл. | Выбранный профиль для всех пяти I-пакетов |
-| `--uapi` | выкл. | Строки UAPI, не полный запрос `set=1` с ключами и peers |
-| `--json` | выкл. | JSON с version, profile, params и lines |
-| `--mihomo` | выкл. | Блок прокси для mihomo |
-| `--out PATH` | stdout | Запись в файл с правами только владельца, с перезаписью |
-| `--set`/`--save` | | Загрузить и сохранить набор настроек (`awg-tool sets`) |
-| `--lang` | по окружению | `en`/`ru`; приоритет выше `AWG_LANG`, `LC_ALL`, `LANG` |
+| `--mtu` | `1500` | Path MTU for size calculations; does not set the tunnel MTU |
+| `--router` | off | Moderate junk and padding for a weak device |
+| `--browser` | unset | Browser packet sizes (chrome, edge, firefox, safari, ios, yandex-desktop, yandex-mobile, 360, qq) |
+| `--mimic-all` | off | The chosen profile for all five I packets |
+| `--uapi` | off | UAPI lines, not a full `set=1` request with keys and peers |
+| `--json` | off | JSON with version, profile, params and lines |
+| `--mihomo` | off | A proxy block for mihomo |
+| `--out PATH` | stdout | Write to an owner-only file, overwriting |
+| `--set`/`--save` | | Load or save a set of settings (`awg-tool sets`) |
+| `--lang` | from the environment | `en`/`ru`; wins over `AWG_LANG`, `LC_ALL`, `LANG` |
 
-`--tag-c` принимается для старых скриптов и ничего не принуждает: `<c>`
-используется там, где его понимают оба движка. Блок 3.x содержит секретный
-`HeaderProtectionKey`, поэтому `params.conf` не следует коммитить.
+`--tag-c` is accepted for old scripts and forces nothing: `<c>` is used where
+both engines understand it. A 3.x block holds the secret
+`HeaderProtectionKey`, so never commit `params.conf`.
 
-## Проверка готового конфига
+## Checking a finished config
 
 ```bash
 awg-tool check client.conf
@@ -144,18 +145,19 @@ awg-tool check 'vpn://...' --client amneziawg-windows
 awg-tool check - --json < server.conf
 ```
 
-Код выхода 0 без замечаний, 1 с предупреждениями, 2 с ошибками. Проверка
-находит выход за пределы MTU, совпадения размеров, которые отвергает демон
-поколения, недопустимые теги, ограничения клиента. Не вставляй конфиг с
-ключами в чат ради проверки: запускай `check` там, где лежит файл.
+Exit code 0 with no findings, 1 with warnings, 2 with errors. The check finds
+sizes over the MTU, size collisions the generation's daemon refuses, invalid
+tags, client limits, a placeholder endpoint, and the known client quirks (see
+"Client quirks" in [clients.md](clients.md)). Never paste a config with keys
+into the chat to check it: run `check` where the file is.
 
-## Структура конфигураций
+## Config structure
 
-Шаблоны ниже показывают структуру и **не готовы к запуску**: замени значения в
-угловых скобках реальными ключами и вставь блок генератора. Секреты не
-добавляй в Git и в публичные issue.
+The templates below show the structure and are **not ready to run**: replace
+the values in angle brackets with real keys and paste in the generator's
+block. Keep secrets out of Git and public issues.
 
-Сервер `server.conf`:
+Server `server.conf`:
 
 ```ini
 [Interface]
@@ -163,7 +165,7 @@ PrivateKey = <server-private-key-base64>
 Address = 10.99.0.1/24
 ListenPort = 51820
 MTU = 1280
-# Вставь сюда блок awg-tool gen, соответствующий версии образа.
+# Paste the awg-tool gen block that matches the image version here.
 
 [Peer]
 PublicKey = <client-public-key-base64>
@@ -171,7 +173,7 @@ PresharedKey = <shared-psk-base64>
 AllowedIPs = 10.99.0.2/32
 ```
 
-Клиент `client.conf`:
+Client `client.conf`:
 
 ```ini
 [Interface]
@@ -179,7 +181,7 @@ PrivateKey = <client-private-key-base64>
 Address = 10.99.0.2/32
 DNS = 172.29.172.254
 MTU = 1280
-# Вставь тот же совместимый блок обфускации.
+# Paste the same compatible obfuscation block.
 
 [Peer]
 PublicKey = <server-public-key-base64>
@@ -189,167 +191,181 @@ Endpoint = vpn.example.com:51820
 PersistentKeepalive = 25
 ```
 
-Для демонстрационной пары внутри Compose `Endpoint` клиента может быть
-`172.31.99.10:51820`. Для внешнего устройства нужен доступный публичный IP или
-домен сервера и опубликованный UDP-порт; имя контейнера и bridge-IP извне
-недоступны. За NAT отдельно настрой проброс UDP на пограничном устройстве.
+For the demo pair inside Compose the client's `Endpoint` can be
+`172.31.99.10:51820`. An outside device needs the server's reachable public IP
+or domain and a published UDP port; the container name and bridge IP are not
+reachable from outside. Behind NAT, forward UDP on the edge device as well.
 
-Приватные ключи сторон различаются. На сервере у `[Peer]` публичный ключ
-клиента, на клиенте публичный ключ сервера. `PresharedKey` одной пары
-совпадает. Серверный `AllowedIPs` ограничивает адрес **этого** клиента, обычно
-`/32`; не вставляй туда клиентский `0.0.0.0/0` ради выхода в интернет.
+The two sides have different private keys. On the server, `[Peer]` holds the
+client's public key; on the client, the server's. One pair shares the same
+`PresharedKey`. The server's `AllowedIPs` limits **this** client's address,
+usually a `/32`; never put the client's `0.0.0.0/0` there to reach the
+internet.
 
-Для full tunnel на клиенте используй `AllowedIPs = 0.0.0.0/0`. Для split tunnel
-перечисли нужные сети и сеть сервисов `172.29.172.0/24`, где резолвер
-(`.254`) и страницы (`.253`). Сеть контейнеров, NAT и SSH-install ориентированы
-на IPv4: `::/0` сам по себе не создаёт рабочий IPv6. Если на устройстве есть
-IPv6, а в `AllowedIPs` только `0.0.0.0/0`, IPv6 уходит мимо туннеля; это ловят
-`awg-leak` и `awg-tool under`.
+For a full tunnel on the client use `AllowedIPs = 0.0.0.0/0, ::/0`, both
+default routes: AmneziaVPN ignores its site lists with only one of them, and
+without `::/0` the device's IPv6 goes around the tunnel (`awg-leak` and
+`awg-tool under` catch that). The container network, NAT and SSH install are
+IPv4: `::/0` keeps IPv6 off the open internet but does not by itself give
+working IPv6. For a split tunnel list the wanted networks plus the services
+network `172.29.172.0/24`, home of the resolver (`.254`) and the pages
+(`.253`).
 
-`MTU = 1280` подходит для 3.x с дополнительным padding и хвостами 3.1 на пути
-MTU 1500. Entrypoint без `MTU` ставит 1420, а выдача клиенту без `MTU` в
-серверном файле даёт 1280: указывай MTU явно, чтобы стороны совпадали. Реальный
-предел пути измеряет `awg-mtu` и страница `mtu.vpn`.
+`MTU = 1280` suits 3.x with extra padding and 3.1 trailers on a 1500 path.
+The entrypoint sets 1420 when there is no `MTU`, while an issued client config
+gets 1280 when the server file has none: set the MTU explicitly so the sides
+match. `awg-mtu` and the `mtu.vpn` page measure the real path limit. Some
+clients bring the tunnel up with a larger MTU than the config says; a node with
+NAT clamps forwarded TCP to its own MTU (`AWG_MSS`).
 
-Entrypoint читает известные ключи и сам настраивает адреса, маршруты и NAT
-через UAPI. `PreUp`, `PostUp`, `PreDown`, `PostDown`, `SaveConfig`, `Table`, как
-в `wg-quick`, не выполняются. Поле `DNS` в `.conf` контейнерного клиента
-**не переписывает** `/etc/resolv.conf`; DNS контейнера настраивается средствами
-Docker. Домен в `Endpoint` резолвится при старте; смена A-записи на лету не
-отслеживается.
+The entrypoint reads the known keys and sets up addresses, routes and NAT
+itself through UAPI. `PreUp`, `PostUp`, `PreDown`, `PostDown`, `SaveConfig` and
+`Table` are not run as in `wg-quick`. The `DNS` field in a container client's
+`.conf` **does not rewrite** `/etc/resolv.conf`; the container's DNS is set up
+through Docker. A domain in `Endpoint` is resolved at start; a changed A record
+is not followed live.
 
-## Переменные контейнера
+## Container variables
 
-Значения относятся к текущим `entrypoint.sh`, `awg-peer`, `awg-watch` и Compose;
-флаги `awg-tool install` это другой интерфейс.
+These belong to the current `entrypoint.sh`, `awg-peer`, `awg-watch` and
+Compose; `awg-tool install` flags are a different interface.
 
-| Переменная | По умолчанию | Назначение |
+| Variable | Default | Purpose |
 |---|---|---|
-| `AWG_IFACE` | `awg0` | Имя интерфейса |
-| `AWG_CONF` | `/etc/amnezia/awg/${AWG_IFACE}.conf` | Смонтированный `.conf` |
-| `AWG_SOCK_DIR` | `/var/run/amneziawg` | Каталог UAPI-сокета |
-| `AWG_NAT` | `auto` | `on`/`off`; `auto` включает NAT при наличии `ListenPort` |
-| `AWG_MSS` | `auto` | С NAT держит MSS проходящего TCP под MTU туннеля (MTU минус 40); число задаёт своё значение, `off` выключает |
-| `AWG_FWMARK`, `AWG_TABLE` | `ListenPort`, иначе `51820` | Mark и table для маршрута по умолчанию клиента |
-| `AWG_STATE_DIR` | `/var/lib/awg` | Счётчик запусков и восстановление peers |
-| `AWG_PEERS_DIR` | см. ниже | Каталог записей динамических peers |
-| `AWG_EVENT_LOG` | `/var/log/awg/events.log` | Журнал событий |
-| `AWG_EVENT_LOG_MAX_BYTES` | `262144` | Размер ротации; одна старая копия |
-| `AWG_ENDPOINT` | `SERVER_PUBLIC_IP:<ListenPort>` | Внешний endpoint для новых конфигураций |
-| `AWG_PUBLIC_HOST` | не задан | Запасной host для выдачи, если нет `AWG_ENDPOINT` |
-| `AWG_CLIENT_DNS` | `172.29.172.254` | DNS в выдаваемом клиентском `.conf` |
-| `AWG_SERVICES_NET` | `/24` резолвера | Сеть резолвера и страниц, маршрутизируемая в туннель |
-| `AWG_CLIENT_ALLOWED` | `<сеть-туннеля>/24, <сеть-сервисов>/24` | Маршруты в выдаваемом клиентском `.conf` |
-| `AWG_NAMES_FILE` | `/var/lib/awg-names/names.hosts` | Имена peers для резолвера и факты узла рядом |
-| `AWG_WATCH` | `on` | `off` выключает фоновый `awg-watch` |
-| `AWG_WATCH_QUIET` | `600` | Секунд без handshake до статуса «замолчал» |
-| `AWG_DUMP_REQUEST` | `0` | `1` сохраняет секретный UAPI-запрос в `/tmp/uapi-set.req` |
-| `LOG_LEVEL` | не задан | `verbose` включает подробный лог демона |
+| `AWG_IFACE` | `awg0` | Interface name |
+| `AWG_CONF` | `/etc/amnezia/awg/${AWG_IFACE}.conf` | The mounted `.conf` |
+| `AWG_SOCK_DIR` | `/var/run/amneziawg` | UAPI socket directory |
+| `AWG_NAT` | `auto` | `on`/`off`; `auto` turns NAT on when there is a `ListenPort` |
+| `AWG_MSS` | `auto` | With NAT, holds forwarded TCP MSS to the tunnel MTU (MTU minus 40); a number sets its own value, `off` turns it off |
+| `AWG_FWMARK`, `AWG_TABLE` | `ListenPort`, else `51820` | Mark and table for a client's default route |
+| `AWG_STATE_DIR` | `/var/lib/awg` | Start counter and peer restore |
+| `AWG_PEERS_DIR` | see below | Directory of dynamic peer records |
+| `AWG_EVENT_LOG` | `/var/log/awg/events.log` | Event log |
+| `AWG_EVENT_LOG_MAX_BYTES` | `262144` | Rotation size; one old copy |
+| `AWG_ENDPOINT` | `SERVER_PUBLIC_IP:<ListenPort>` | External endpoint for new configs |
+| `AWG_PUBLIC_HOST` | unset | Fallback host for issuing when there is no `AWG_ENDPOINT` |
+| `AWG_CLIENT_DNS` | `172.29.172.254` | DNS in the issued client `.conf` |
+| `AWG_SERVICES_NET` | the resolver's `/24` | Resolver and pages network routed into the tunnel |
+| `AWG_CLIENT_ALLOWED` | `<tunnel>/24, <services>/24` | Routes in the issued client `.conf`. A full tunnel is `0.0.0.0/0, ::/0`: with only one of them AmneziaVPN silently skips its site lists, and `awg-peer` warns |
+| `AWG_NAMES_FILE` | `/var/lib/awg-names/names.hosts` | Peer names for the resolver, with node facts next to it |
+| `AWG_WATCH` | `on` | `off` stops the background `awg-watch` |
+| `AWG_WATCH_QUIET` | `600` | Seconds without a handshake before "went quiet" |
+| `AWG_DUMP_REQUEST` | `0` | `1` keeps the secret UAPI request in `/tmp/uapi-set.req` |
+| `LOG_LEVEL` | unset | `verbose` turns on the daemon's detailed log |
 
-У `awg-peer` значение `AWG_PEERS_DIR=/var/lib/awg/peers.d` фиксировано, а у
-entrypoint оно вычисляется из `AWG_STATE_DIR`. При переносе state-каталога
-задай **оба** пути одинаково, иначе новые peers и восстановление после старта
-смотрят в разные каталоги.
+`awg-peer` has `AWG_PEERS_DIR=/var/lib/awg/peers.d` fixed, while the
+entrypoint derives it from `AWG_STATE_DIR`. When moving the state directory
+set **both** the same way, or new peers and the restore after start look in
+different places.
 
-## DNS, страницы .vpn и маршрутизация
+## DNS, the .vpn pages and routing
 
-В штатном Compose сервер соединяет транспортную сеть `172.31.99.0/24` и
-отдельный DNS bridge `172.29.172.0/24`. Резолвер на `172.29.172.254`, страницы
-на `172.29.172.253`. Ни порт 53, ни HTTP страниц наружу не публикуются.
+In the stock Compose the server joins the transport network `172.31.99.0/24`
+and a separate DNS bridge `172.29.172.0/24`. The resolver is on
+`172.29.172.254`, the pages on `172.29.172.253`. Neither port 53 nor the pages'
+HTTP is published outside.
 
-- Не добавляй `ports: 53:53` ради внешних клиентов: они должны обращаться к DNS
-  **через туннель**, а сервер должен достигать bridge.
-- Для split tunnel `DNS = 172.29.172.254` нужен маршрут в сеть сервисов;
-  выдача по умолчанию уже включает `172.29.172.0/24` (резолвер и страницы).
-  Конфиги, выданные до 0.5.0 с одним `/32` резолвера, не открывают страницы:
-  добавь `172.29.172.0/24` или перевыпусти конфиг.
-- Fail-closed свойство относится к запросу на этот приватный адрес при
-  сохранённой изоляции сетей. Оно не блокирует системный fallback, браузерный
-  DoH или другой VPN на устройстве; проверяй фактический клиент.
-- Не подменяй tunnel-only DNS публичным `1.1.1.1`/`8.8.8.8` и не заявляй после
-  этого прежние гарантии.
+- Do not add `ports: 53:53` for outside clients: they must reach DNS
+  **through the tunnel**, and the server must reach the bridge.
+- A split tunnel with `DNS = 172.29.172.254` needs a route to the services
+  network; the default issue already includes `172.29.172.0/24` (resolver and
+  pages). Configs issued before 0.5.0 with only the resolver's `/32` do not
+  open the pages: add `172.29.172.0/24` or reissue.
+- The fail-closed property covers queries to this private address while the
+  networks stay isolated. It does not block a system fallback, browser DoH or
+  another VPN on the device; check the real client.
+- Do not swap tunnel-only DNS for a public `1.1.1.1`/`8.8.8.8` and then claim
+  the old guarantees.
+- The resolver runs with every capability dropped and needs
+  `cap_add: [NET_BIND_SERVICE]` for port 53 (the stock Compose has it). Since
+  0.5.1 it also starts without it where Docker allows low ports.
+- On a server on two networks, check which one carries its default route: if
+  it goes through the resolver's network, set `gw_priority` (Docker Engine 28+);
+  `containers/README.md` shows how.
 
-### Как резолвер получает ответы
+### How the resolver gets answers
 
-`AWG_DNS_MODE=auto` (по умолчанию) при старте спрашивает корневые серверы:
-отвечают, значит рекурсия; не отвечают (сеть режет исходящий DNS), значит DoT к
-`AWG_DNS_FORWARD` (Cloudflare и Quad9). `recursive` и `forward` фиксируют режим.
-DNSSEC проверяется. Отсутствие ответов может быть ограничением egress сервера,
-а не отсутствием handshake.
+`AWG_DNS_MODE=auto` (the default) asks the root servers at start: if they
+answer, it recurses; if not (the network cuts outgoing DNS), it uses DoT to
+`AWG_DNS_FORWARD` (Cloudflare and Quad9). `recursive` and `forward` pin the
+mode. DNSSEC is validated. No answers can be the server's egress limit, not a
+missing handshake.
 
-### Списки, свои записи, зоны
+### Lists, own records, zones
 
-Всё необязательное лежит в каталоге, монтируемом в `/etc/awg-dns` (read-only);
-изменения подхватываются за секунды, без перезапуска:
+Everything optional lives in a directory mounted at `/etc/awg-dns`
+(read-only); changes are picked up within seconds, without a restart:
 
-| Путь | Содержимое |
+| Path | Content |
 |---|---|
-| `blocklists.d/*.txt` | Имена для блокировки: просто имена, строки hosts или `\|\|name^` |
-| `blocklists.url` | Адреса списков, обновляются раз в `AWG_DNS_REFRESH` секунд |
-| `allowlist.d/*.txt` | Имена, которые не блокируются ни при каких списках |
-| `records.d/*.records` | Свои записи: `nas.home A 192.168.1.10` (A AAAA CNAME TXT MX SRV PTR) |
-| `vpn.d/*.records` | Имена в собственной зоне `.vpn` |
-| `forward.d/*.conf` | Зоны к выбранным резолверам: `home.arpa. 192.168.1.1` |
-| `chain.conf` | Цепочка резолверов по порядку |
+| `blocklists.d/*.txt` | Names to block: plain names, hosts lines or `\|\|name^` |
+| `blocklists.url` | List URLs, refreshed every `AWG_DNS_REFRESH` seconds |
+| `allowlist.d/*.txt` | Names never blocked, whatever the lists say |
+| `records.d/*.records` | Own records: `nas.home A 192.168.1.10` (A AAAA CNAME TXT MX SRV PTR) |
+| `vpn.d/*.records` | Names in the own `.vpn` zone |
+| `forward.d/*.conf` | Zones sent to chosen resolvers: `home.arpa. 192.168.1.1` |
+| `chain.conf` | The resolver chain, in order |
 
-Старый путь `/etc/unbound/blacklist.d` тоже читается. Заблокированное имя и всё
-под ним получает NXDOMAIN от самого резолвера. Сломанная строка не роняет
-резолвер: конфиг проверяется до применения, иначе остаётся прежний.
+The old path `/etc/unbound/blacklist.d` is read too. A blocked name and
+everything under it gets NXDOMAIN from the resolver itself. A broken line does
+not take the resolver down: the config is checked before it is applied, and
+otherwise the old one stays.
 
-Из CLI, на хосте, который выбрал бы `status`:
+From the CLI, on the host `status` would pick:
 
 ```bash
-awg-tool dns                      # режим, счётчики, зоны, цепочка
+awg-tool dns                      # mode, counters, zones, chain
 awg-tool dns block ads.example
 awg-tool dns allow www.example
 awg-tool dns query example.com
 ```
 
-`block`/`allow` пишут в собственный том резолвера (`awg-dns-state`), а не в
-операторский каталог. Добавление нового обработчика списков не нужно.
+`block`/`allow` write to the resolver's own volume (`awg-dns-state`), not to
+the operator's directory. No new list handler is needed.
 
-### Цепочка и пересылаемые зоны
+### The chain and forwarded zones
 
-`chain.conf` перечисляет резолверы, которых спрашивают по порядку; `default`
-это собственный путь резолвера (рекурсия или DoT, с DNSSEC):
+`chain.conf` lists resolvers asked in order; `default` is the resolver's own
+path (recursion or DoT, with DNSSEC):
 
 ```
 default
 185.121.177.177
 ```
 
-Цепочка переходит к следующему, если ответа нет вовремя, пришёл SERVFAIL,
-REFUSED, NXDOMAIN или адреса только `0.0.0.0`, `127.0.0.0/8`, `::`, `::1`
-(так фильтры говорят «заблокировано»). Так домены другого корня (`.geek`)
-резолвятся, а обычные имена идут как раньше. `AWG_DNS_CHAIN_KEEP` принимает
-причину вместо перехода, `AWG_DNS_CHAIN_SINKHOLES` добавляет адреса-заглушки.
-Ответы дальше по цепочке **не проходят проверку DNSSEC**; предупреди об этом.
-Если нужна одна зона, проще `forward.d`: она идёт только к названным
-резолверам, в том числе зоны, на которые unbound иначе отвечает сам
-(`home.arpa.`, `test.`, частные обратные зоны). Зону `.vpn` переслать нельзя.
+The chain moves to the next one when there is no answer in time, on SERVFAIL,
+REFUSED, NXDOMAIN, or when the addresses are only `0.0.0.0`, `127.0.0.0/8`,
+`::`, `::1` (how filters say "blocked"). That way domains of another root
+(`.geek`) resolve, and ordinary names go as before. `AWG_DNS_CHAIN_KEEP`
+accepts a reason instead of moving on, `AWG_DNS_CHAIN_SINKHOLES` adds sinkhole
+addresses. Answers further down the chain are **not DNSSEC-validated**; say so.
+For a single zone `forward.d` is simpler: it goes only to the named resolvers,
+including zones unbound would otherwise answer itself (`home.arpa.`, `test.`,
+private reverse zones). The `.vpn` zone cannot be forwarded.
 
-### Страницы .vpn
+### The .vpn pages
 
-`amiunder.vpn` (под VPN или нет), `dns.vpn` (режим, счётчики, поиск имени),
-`speed.vpn`, `mtu.vpn`, `leak.vpn` (резолвит ли браузер в обход туннеля),
-`node.vpn`. По адресу без имени страница выбирается фрагментом:
-`http://172.29.172.253/#dns`. Страницы показывают только количества и никогда
-имена других peers.
+`amiunder.vpn` (under the VPN or not), `dns.vpn` (mode, counters, name
+lookup), `speed.vpn`, `mtu.vpn`, `leak.vpn` (does the browser resolve around
+the tunnel), `node.vpn`. At the bare address a fragment picks the page:
+`http://172.29.172.253/#dns`. The pages show only counts, never the names of
+other peers.
 
-## Изменение настроек
+## Changing settings
 
-1. Зафиксируй текущие пути `.conf`, volumes, образ и digest, порт и список peers
-   без публикации секретов.
-2. Перед перезапуском предупреди об обрыве туннеля. Сохрани резервную копию
-   конфигурации и state с правами только оператора.
-3. При смене обфускации используй `awg-tool rotate` и синхронно обнови всех
-   клиентов; при смене endpoint, DNS или маршрутов перевыпусти или отредактируй
-   уже выданные файлы. Переменные контейнера меняют будущую выдачу, а не файлы
-   на телефонах.
-4. Изменение `environment`, образа или mount в Compose требует пересоздания
-   сервиса через `docker compose up -d server`; простой `restart` не применяет
-   изменённое описание контейнера. Сам `.conf` перечитывается при запуске.
-5. Не удаляй named volumes для «сброса»: там PSK и динамические peers.
-   Утраченный state нельзя восстановить по одному списку публичных ключей.
-6. Проверь handshake и реальный DNS и трафик после изменения, а не только
-   `healthy`. Порядок диагностики описан в [operations.md](operations.md).
+1. Record the current `.conf` paths, volumes, image and digest, port and peer
+   list without publishing secrets.
+2. Warn about the tunnel dropping before a restart. Keep a backup of the config
+   and state, readable by the operator only.
+3. To change obfuscation use `awg-tool rotate` and update every client
+   together; when changing the endpoint, DNS or routes, reissue or edit the
+   files already handed out. Container variables change future issues, not the
+   files on phones.
+4. Changing `environment`, the image or a mount in Compose needs the service
+   recreated with `docker compose up -d server`; a plain `restart` does not
+   apply a changed container description. The `.conf` itself is reread at
+   start.
+5. Never delete named volumes to "reset": they hold PSKs and dynamic peers.
+   Lost state cannot be rebuilt from a list of public keys.
+6. After the change check the handshake and real DNS and traffic, not only
+   `healthy`. The diagnostic order is in [operations.md](operations.md).

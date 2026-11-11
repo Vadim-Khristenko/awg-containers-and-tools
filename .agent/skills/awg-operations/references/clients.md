@@ -1,101 +1,105 @@
-# Добавление, выдача и отзыв клиентов
+# Adding, issuing and revoking clients
 
-## Содержание
+## Contents
 
-- [Выбор инструмента и предварительные проверки](#выбор-инструмента-и-предварительные-проверки)
-- [Выдача конфигурации](#выдача-конфигурации)
-- [Хранение состояния и ограничения](#хранение-состояния-и-ограничения)
-- [Импорт и проверка устройства](#импорт-и-проверка-устройства)
-- [Отзыв, потерянные ключи и смена обфускации](#отзыв-потерянные-ключи-и-смена-обфускации)
+- [Choosing the tool and checking first](#choosing-the-tool-and-checking-first)
+- [Issuing a config](#issuing-a-config)
+- [State and limits](#state-and-limits)
+- [Importing and checking a device](#importing-and-checking-a-device)
+- [Client quirks](#client-quirks)
+- [Revoking, lost keys and rotating obfuscation](#revoking-lost-keys-and-rotating-obfuscation)
 
-## Выбор инструмента и предварительные проверки
+## Choosing the tool and checking first
 
-Есть два равноправных пути, и оба вызывают одну и ту же утилиту `awg-peer`
-внутри контейнера узла:
+There are two equal paths, and both call the same `awg-peer` utility inside the
+node's container:
 
-- `awg-tool peer add|list|rm` с этой машины: локально (`--local`) или по SSH
-  (`--server ИМЯ`, `--host АДРЕС`), с выбором узла `--container`;
-- `docker exec <контейнер> awg-peer ...` на Docker-хосте сервера.
+- `awg-tool peer add|list|rm` from this machine: locally (`--local`) or over
+  SSH (`--server NAME`, `--host ADDRESS`), with `--container` to pick the node;
+- `docker exec <container> awg-peer ...` on the server's Docker host.
 
-Источник истины: `containers/awg-peer` и восстановление peers в
-`containers/entrypoint.sh`. Для нерутового пользователя на сервере используй
-согласованный способ доступа к Docker; не добавляй его автоматически в группу
-`docker`: членство фактически даёт root.
+Source of truth: `containers/awg-peer` and the peer restore in
+`containers/entrypoint.sh`. For a non-root user on the server use the agreed
+way into Docker; never add the user to the `docker` group on your own:
+membership is effectively root.
 
-До изменения:
+Before changing anything:
 
-1. Подтверди контейнер, поколение и интерфейс (`awg-tool status`). Примеры
-   ниже используют `awg-server`; после `install` имя другое (`awg31-server`
-   для 3.1 и так далее).
-2. Посмотри `awg-tool peer list` (или `awg-peer list`): метка должна быть
-   новой, адрес свободным. Автовыделение рассчитано на обычный IPv4 `/24`.
-3. Уточни приложение и его версию на устройстве. Выдача не принимает `--client`
-   и не подгоняет блок обфускации под Windows или роутер. Если общие параметры
-   несовместимы с новым клиентом, выбери совместимое приложение или
-   согласованную смену блока для всех (`awg-tool rotate`); не перегенерируй
-   только новый файл.
-4. Найди публичный endpoint. Для `AWG_ENDPOINT` это **host:port**, в отличие от
-   `awg-tool install --endpoint`, которому нужен host без порта. В bridge-mode
-   укажи внешний опубликованный порт, даже если внутренний `ListenPort` другой.
-   Узел, поставленный `install`, уже знает свой endpoint.
-5. Определи full или split tunnel и DNS. DNS `172.29.172.254` работает только
-   там, где реально развёрнут внутренний резолвер, доступный серверу.
-6. Убедись, что `/var/lib/awg` лежит в volume или что согласованные
-   `AWG_STATE_DIR`/`AWG_PEERS_DIR` ведут в постоянное хранилище. Без этого
-   новый доступ потеряется при пересоздании контейнера.
+1. Confirm the container, the generation and the interface
+   (`awg-tool status`). The examples use `awg-server`; after `install` the name
+   differs (`awg31-server` for 3.1 and so on).
+2. Look at `awg-tool peer list` (or `awg-peer list`): the label must be new
+   and the address free. Automatic allocation assumes a plain IPv4 `/24`.
+3. Find out the app and its version on the device. Issuing takes no
+   `--client` and does not fit the obfuscation block to Windows or a router.
+   If the shared parameters do not suit the new client, choose a compatible app
+   or an agreed change of the block for everyone (`awg-tool rotate`); never
+   regenerate only the new file.
+4. Find the public endpoint. For `AWG_ENDPOINT` it is **host:port**, unlike
+   `awg-tool install --endpoint`, which takes a host without a port. In bridge
+   mode give the published external port, even if the inner `ListenPort`
+   differs. A node set up by `install` already knows its endpoint.
+5. Decide full or split tunnel, and DNS. DNS `172.29.172.254` works only where
+   the internal resolver is actually deployed and reachable from the server.
+6. Make sure `/var/lib/awg` is on a volume, or that the agreed
+   `AWG_STATE_DIR`/`AWG_PEERS_DIR` point to persistent storage. Otherwise the
+   new access is lost when the container is recreated.
 
-## Выдача конфигурации
+## Issuing a config
 
-Метка содержит только `A-Z a-z 0-9 . _ -`, например `alice-phone`. Используй
-простые имена с буквы; не используй пути и `..`. Создавай клиентов
-последовательно: утилита не блокирует одновременное выделение одного адреса.
+A label holds only `A-Z a-z 0-9 . _ -`, for example `alice-phone`. Use simple
+names starting with a letter; no paths and no `..`. Create clients one at a
+time: the utility does not lock against two allocations of one address.
 
-### С этой машины
+### From this machine
 
 ```bash
-awg-tool peer add alice-phone --out alice-phone.conf            # файл только для владельца
-awg-tool peer add alice-phone --out alice-phone.conf --vpn       # плюс ссылка vpn:// в stdout
-awg-tool peer add router --mihomo                                 # плюс блок для mihomo
+awg-tool peer add alice-phone --out alice-phone.conf            # owner-only file
+awg-tool peer add alice-phone --out alice-phone.conf --vpn       # plus a vpn:// link on stdout
+awg-tool peer add router --mihomo                                 # plus a mihomo block
 awg-tool peer list
 ```
 
-Без `--out` конфиг печатается в stdout; в работе агента предпочитай `--out`,
-чтобы секрет не попал в журнал. `--vpn` печатает ссылку в stdout: это тоже
-секрет. Перед печатью выданный конфиг проверяется (`check`), и ошибки идут в
-stderr. Маршруты и DNS берутся из переменных узла (см. ниже); для отдельной
-выдачи с другими маршрутами используй путь через `docker exec`.
+Without `--out` the config goes to stdout; as an agent prefer `--out`, so the
+secret stays out of the log. `--vpn` prints the link on stdout: that is a
+secret too. The issued config is checked (`check`) before it is printed, and
+findings go to stderr. Routes and DNS come from the node's variables (below);
+for one issue with different routes use the `docker exec` path.
 
-### На Docker-хосте: полный IPv4-туннель
+### On the Docker host: a full tunnel
 
-Следующий пример добавляет **новый** peer и сохраняет его приватный конфиг на
-машине, где запущен Docker CLI. Подставь реальный endpoint.
+This adds a **new** peer and saves its private config on the machine running
+the Docker CLI. Put in the real endpoint.
 
 ```bash
 umask 077
 mkdir -p "$HOME/awg-client-configs"
 chmod 700 "$HOME/awg-client-configs"
-# Перед выдачей убедись, что файла с этим именем ещё нет.
+# Make sure no file with this name exists yet.
 docker exec \
   -e AWG_ENDPOINT=vpn.example.com:51820 \
   -e AWG_CLIENT_DNS=172.29.172.254 \
-  -e AWG_CLIENT_ALLOWED=0.0.0.0/0 \
+  -e 'AWG_CLIENT_ALLOWED=0.0.0.0/0, ::/0' \
   awg-server awg-peer add alice-phone \
   > "$HOME/awg-client-configs/alice-phone.conf"
 ```
 
-Не используй `-t`/`-it` при перенаправлении: конфигурация должна попасть в
-чистый stdout, диагностические события в stderr. Проверяй код возврата.
-Shell создаёт и обнуляет файл **до** запуска команды, поэтому не перенаправляй
-повторную неудачную выдачу в единственную сохранённую копию. Пустой или
-частичный файл после ошибки не считается действующим конфигом.
+A full tunnel is always `0.0.0.0/0, ::/0`, both of them: see
+[Client quirks](#client-quirks).
 
-При запуске на VPS файл останется на VPS. Передавай владельцу устройства по
-приватному каналу или забери через SCP в защищённый каталог; не вставляй
-содержимое в issue, общий чат, QR-сервис или публичный pastebin. Приватный ключ
-выдаётся один раз: защищённая копия это обязанность оператора, повторного
-экспорта нет.
+No `-t`/`-it` when redirecting: the config must reach a clean stdout, and the
+diagnostic events go to stderr. Check the exit code. The shell creates and
+truncates the file **before** the command runs, so never redirect a retried
+failed issue into the only saved copy. An empty or partial file after an error
+is not a working config.
 
-### Split tunnel с DNS и страницами
+Run on a VPS, the file stays on the VPS. Hand it to the device owner over a
+private channel, or fetch it with SCP into a protected directory; never paste
+it into an issue, a shared chat, a QR service or a public pastebin. The private
+key is issued once: the protected copy is the operator's job, there is no
+second export.
+
+### Split tunnel with DNS and the pages
 
 ```bash
 umask 077
@@ -107,80 +111,106 @@ docker exec \
   > "$HOME/awg-client-configs/alice-laptop.conf"
 ```
 
-Сеть `10.99.0.0/24` должна совпадать с фактической сетью сервера.
-`AWG_CLIENT_ALLOWED` заменяет весь список, а не дополняет его. Для
-фиксированного адреса: `awg-peer add alice-laptop 10.99.0.7`; сначала проверь
-отсутствие конфликта. Второй `add` для существующей метки отклоняется: это не
-команда редактирования.
+`10.99.0.0/24` must match the server's real network. `AWG_CLIENT_ALLOWED`
+replaces the whole list, it does not add to it. For a fixed address:
+`awg-peer add alice-laptop 10.99.0.7`; check for a conflict first. A second
+`add` for an existing label is refused: it is not an edit command.
 
-Переменные `docker exec -e` действуют только на этот вызов; чтобы применять их
-ко всем будущим выдачам (и к `awg-tool peer add`), задай их в `environment`
-сервиса и согласованно пересоздай контейнер с сохранением state-volume.
+`docker exec -e` variables apply to that one call; to apply them to every
+future issue (and to `awg-tool peer add`), set them in the service's
+`environment` and recreate the container in an agreed window, keeping the
+state volume.
 
-## Хранение состояния и ограничения
+## State and limits
 
 `awg-peer add`:
 
-- читает `[Interface] Address` и ищет свободный хост `.2-.254` в `/24`;
-- проверяет занятость по живому UAPI, включая peers из исходного `.conf`;
-- создаёт ключевую пару клиента и PSK, добавляет peer через UAPI;
-- сохраняет `Label`, `PublicKey`, `Address`, `PresharedKey`, `Created` в
-  `/var/lib/awg/peers.d/<label>.peer` (файл `0600`, каталог `0700`);
-- выводит приватный ключ клиента только в выдаваемом `.conf`, не хранит его и
-  не поддерживает повторный экспорт;
-- копирует блок обфускации из серверного **файла** целиком, включая
-  `RandomTrailers` и `DisableCookies` 3.1, а не из живых настроек UAPI;
-- добавляет `PersistentKeepalive = 25`, MTU (из серверного файла, иначе 1280),
-  DNS и маршруты из переменных;
-- обновляет файл имён, так что peer отвечает как `<метка>.peer.vpn`, а его адрес
-  обратно читается этим именем (если смонтирован том `awg-names`).
+- reads `[Interface] Address` and looks for a free host `.2-.254` in the `/24`;
+- checks what is taken against live UAPI, including peers from the original
+  `.conf`;
+- creates the client's key pair and PSK, and adds the peer through UAPI;
+- saves `Label`, `PublicKey`, `Address`, `PresharedKey`, `Created` to
+  `/var/lib/awg/peers.d/<label>.peer` (file `0600`, directory `0700`);
+- puts the client's private key only into the issued `.conf`, does not keep it
+  and has no second export;
+- copies the obfuscation block from the server **file** whole, including 3.1's
+  `RandomTrailers` and `DisableCookies`, not from live UAPI settings;
+- adds `PersistentKeepalive = 25`, the MTU (from the server file, else 1280),
+  DNS and routes from the variables;
+- updates the names file, so the peer answers as `<label>.peer.vpn` and its
+  address reads back as that name (when the `awg-names` volume is mounted).
 
-`AllowedIPs` по умолчанию: `<туннель>/24, <сеть-сервисов>/24`, то есть
-**split tunnel** с резолвером и страницами, а не весь интернет-трафик.
-Endpoint по умолчанию может остаться буквальным `SERVER_PUBLIC_IP:51820`;
-такой файл сначала исправь, не отправляй клиенту. Начиная с 0.5.1 `awg-peer`
-предупреждает об этом строкой `!!` в stderr, а `awg-tool` не выдаёт `vpn://` с
-заглушкой и просит задать `AWG_PUBLIC_HOST` или `AWG_ENDPOINT`.
+The default `AllowedIPs` is `<tunnel>/24, <services>/24`: a **split tunnel**
+with the resolver and the pages, not all internet traffic. The default endpoint
+can stay the literal `SERVER_PUBLIC_IP:51820`; fix such a file before it goes
+to a client. Since 0.5.1 `awg-peer` warns about it with a `!!` line on stderr,
+and `awg-tool` refuses to build a `vpn://` link with the placeholder and asks
+for `AWG_PUBLIC_HOST` or `AWG_ENDPOINT`.
 
-Существенные границы текущей реализации:
+Real limits of the current implementation:
 
-1. Автонумерация считает сеть `/24` по первым трём октетам, не по настоящей
-   маске. При другой маске и IPv6 не доверяй автовыдаче.
-2. Явный IP не проверяется полноценно на подсеть и занятость; автовыделение
-   проверяет точные `/32`, а не все возможные перекрытия `AllowedIPs`.
-3. Если адрес сервера не `.1`, проверь и конфликт с ним: перебор `.2-.254` не
-   резервирует произвольный адрес сервера.
-4. Изменение параметров через сырой UAPI без изменения серверного `.conf`
-   рассинхронизирует будущую выдачу и следующий старт.
-5. Peer добавляется в устройство до записи файла и вывода конфига. Если
-   команда оборвалась, проверь `list` и наличие постоянной записи: не повторяй
-   `add` вслепую и не оставляй неизвестный рабочий доступ.
+1. Auto numbering takes the `/24` from the first three octets, not the real
+   mask. With another mask, or IPv6, do not trust auto allocation.
+2. An explicit IP is not fully checked against the subnet and what is taken;
+   auto allocation checks exact `/32`s, not every possible `AllowedIPs`
+   overlap.
+3. If the server's address is not `.1`, check for a conflict with it too:
+   the `.2-.254` scan does not reserve an arbitrary server address.
+4. Changing parameters through raw UAPI without changing the server `.conf`
+   puts future issues and the next start out of step.
+5. The peer is added to the device before the file is written and the config
+   printed. If the command broke off, check `list` and the persistent record:
+   never repeat `add` blindly, and never leave an unknown working access.
 
-## Импорт и проверка устройства
+## Importing and checking a device
 
-1. Передай `.conf` только владельцу устройства. Импортируй в приложение,
-   поддерживающее выбранное поколение AmneziaWG, не в обычный WireGuard без
-   поддержки AWG. Названия пунктов интерфейса зависят от приложения и версии.
-2. Убедись, что endpoint не заглушка, адрес уникален, DNS и `AllowedIPs`
-   соответствуют задаче; содержимое секретных строк в чат не копируй.
-3. Подключи устройство и создай трафик. На сервере проверь
-   `awg-tool peer list` или `awg-peer list`: ожидается свежий handshake именно
-   нового публичного ключа; `never` до первого включения нормален.
-   `awg-watch` после этого запишет `peer-first-handshake`.
-4. С клиента: `http://amiunder.vpn` (под VPN или нет), `http://leak.vpn`
-   (резолвит ли браузер через туннель). На компьютере `awg-tool under` проверяет
-   то же без браузера и с кодом выхода. Для full tunnel проверь внешний IPv4 на
-   доверенном ресурсе; заранее предупреди, если это сторонний сервис.
-5. Проверь системный DNS, DoH и IPv6 отдельно. `0.0.0.0/0` не означает полный
-   IPv6-туннель, а здоровье сервера не доказывает отсутствие утечек на телефоне.
+1. Give the `.conf` only to the device owner. Import it into an app that
+   supports the chosen AmneziaWG generation, not into plain WireGuard without
+   AWG support. Menu names depend on the app and its version.
+2. Make sure the endpoint is not a placeholder, the address is unique, and DNS
+   and `AllowedIPs` fit the task. `awg-tool check <file>` names the known
+   problems without changing anything; never copy secret lines into the chat.
+3. Connect the device and make some traffic. On the server check
+   `awg-tool peer list` or `awg-peer list`: expect a fresh handshake for
+   exactly the new public key; `never` before the first connect is normal.
+   `awg-watch` then logs `peer-first-handshake`.
+4. From the client: `http://amiunder.vpn` (under the VPN or not),
+   `http://leak.vpn` (does the browser resolve through the tunnel). On a
+   computer `awg-tool under` checks the same without a browser and with an exit
+   code. For a full tunnel check the external IPv4 on a trusted site; say
+   beforehand if it is a third-party service.
+5. Check system DNS, DoH and IPv6 separately. Server health does not prove a
+   phone does not leak.
 
-`vpn://` содержит приватный конфиг: это сжатая упаковка JSON в base64url,
-**не шифрование**. `awg-tool peer add --vpn` выдаёт её для нового peer,
-`awg-tool check vpn://...` читает и проверяет существующую.
+`vpn://` holds a private config: a compressed JSON packed into base64url,
+**not encryption**. `awg-tool peer add --vpn` builds one for a new peer,
+`awg-tool check vpn://...` reads and checks an existing one.
 
-## Отзыв, потерянные ключи и смена обфускации
+## Client quirks
 
-После явного разрешения на отзыв конкретного клиента:
+Every quirk the project knows about a client is a warning in `awg-tool check`
+or in `awg-peer`, never a silent fix. Pass it on to the user in plain words.
+
+| Quirk | Effect | What the project does |
+|---|---|---|
+| AmneziaVPN applies its site lists ("Direct" / "Through VPN") only when `AllowedIPs` holds both `0.0.0.0/0` and `::/0` (`vpnConnection.cpp`, every platform including Android) | With one of the two the lists are dropped without a word | `check` warns (`conf.full_tunnel_one_family`) and `awg-peer` prints a `!!` line, since 0.5.5. Issue a full tunnel as `0.0.0.0/0, ::/0` |
+| AmneziaVPN on Windows can bring the tunnel up with a larger MTU than the config says (1376 seen for a 1280 config) | TCP stalls on large segments: TLS to big sites hangs on 3.1 | A node with NAT clamps forwarded TCP to the tunnel's MTU since 0.5.1 (`AWG_MSS=auto`, `off` turns it off) |
+| AmneziaVPN imports `vpn://` only in its own format (container `amnezia-awg`) | Links from awg-tool before 0.5.1 import with "no protocol installed" | Reissue the link with awg-tool 0.5.1 or newer. 3.x keys need client 5.0.0.2 or newer; 4.8 does not have them |
+| AmneziaWG for Windows before 2.0.2, and wg-easy as a client, limit H1-H4 to under 2^31-1 | A newer block is refused | `--client-release` / `--client` when generating, and `check --client` |
+| AmneziaVPN keeps `HeaderProtectionKey` to itself and does not write it into an exported file; protection is switched on in the server's protocol settings, and the client's box is read-only | An imported config without the key cannot turn protection on, and plain H1-H4 (`--disable-h`) would then go out in the clear | Say it when a 3.x config is moved between AmneziaVPN and other clients; issue 3.x configs from the node (`awg-peer`), which writes the key |
+| AmneziaVPN refuses to save equal padded sizes (S4 + 32 included) | The settings will not save | The generator never emits them; `check` reports `s.size_collision` |
+| mihomo reads 3.x fields only with `version: 3` | Without it mihomo silently runs the old protocol | `gen --mihomo` and `peer add --mihomo` write it |
+| The kernel module (`awg setconf` over netlink) fails with "message too long" when the I1-I5 chains overflow one netlink page | The interface does not come up | The generator keeps chains inside the budget for `--server-engine kmod` |
+| WireSock does not send I1-I5 chains | A block that relies on them is not mimicry on that client | Configs for `--client wiresock` leave them out |
+| Every client has its own caps on S4, Jc and H | Over the cap is an error for that client only | `gen --client` stays inside them; `check --client` names the overflow |
+| An endpoint left as `SERVER_PUBLIC_IP` | No client can connect | `awg-peer` warns, `check` warns (`conf.peer_endpoint_placeholder`), `vpn://` is refused |
+
+When you meet a new quirk, name it to the user and suggest adding it to the
+table and to `check` in the same change.
+
+## Revoking, lost keys and rotating obfuscation
+
+After explicit permission to revoke a specific client:
 
 ```bash
 awg-tool peer list
@@ -188,40 +218,39 @@ awg-tool peer rm alice-phone
 awg-tool peer list
 ```
 
-`rm` принимает метку **или публичный ключ base64**. Проверь точное совпадение
-перед выполнением. У динамического peer команда удаляет живой peer и запись
-`peers.d`. Убедись в отсутствии публичного ключа после операции и, если
-согласован перезапуск, после него тоже.
+`rm` takes a label **or a base64 public key**. Check the exact match before
+running it. For a dynamic peer it removes the live peer and the `peers.d`
+record. Confirm the public key is gone after the operation and, if a restart
+was agreed, after that too.
 
-`(unlabelled)` в списке может быть peer из смонтированного серверного `.conf`.
-`rm <public-key>` удалит его только из живого устройства; при запуске
-entrypoint он вернётся. Для постоянного отзыва убери ровно соответствующий
-`[Peer]` из постоянного серверного файла, проверь отсутствие копии в
-`peers.d`, затем примени изменение в согласованное окно. Не очищай все peers
-и не удаляй volume.
+`(unlabelled)` in the list can be a peer from the mounted server `.conf`.
+`rm <public-key>` removes it only from the live device; the entrypoint brings
+it back on start. To revoke it for good, remove exactly that `[Peer]` from the
+persistent server file, check there is no copy in `peers.d`, then apply the
+change in an agreed window. Never clear all peers and never delete the volume.
 
-Потерянный приватный ключ клиента не восстанавливается по публичному ключу или
-PSK на сервере. Отзови старый peer, создай новый, передай новый `.conf` и
-проверь handshake.
+A lost client private key cannot be recovered from the public key or the PSK
+on the server. Revoke the old peer, create a new one, hand over the new `.conf`
+and check the handshake.
 
-### Смена обфускации для всех
+### Rotating obfuscation for everyone
 
-При утечке `HeaderProtectionKey` или блока обфускации, а также для плановой
-смены:
+When `HeaderProtectionKey` or the obfuscation block has leaked, or as a planned
+change:
 
 ```bash
-awg-tool rotate --dry-run       # что поменяется и каким клиентам нужен новый блок
+awg-tool rotate --dry-run       # what changes and which clients need the new block
 awg-tool rotate --out block.conf
 ```
 
-Ротация меняет всё, о чём договариваются стороны, и не трогает ключ, адрес,
-порт и peers сервера. Конфиг находится через монтирование контейнера, рядом
-кладётся резервная копия `<файл>.bak-<время>`, узел перезапускается, а если не
-поднялся за 30 секунд, прежний конфиг возвращается. По SSH приватные ключи не
-передаются. Перед запуском назови узел и предупреди: все клиенты перестанут
-подключаться, пока не получат новый блок (`--out` записывает его в файл
-только для владельца). `--yes` пропускает вопрос, используй его только после
-явного согласия. Ротация работает, когда конфиг смонтирован с хоста
-(`install` и Compose так и делают). При утечке **серверного приватного ключа**
-ротации обфускации недостаточно: нужна согласованная смена ключа сервера и
-перевыпуск всех клиентов.
+Rotation changes everything the two sides agree on and leaves the server's key,
+address, port and peers alone. The config is found through the container's
+mount, a backup `<file>.bak-<time>` is written next to it, the node restarts,
+and if it is not up within 30 seconds the old config comes back. No private
+keys travel over SSH. Before running it, name the node and warn: every client
+stops connecting until it gets the new block (`--out` writes it to an
+owner-only file). `--yes` skips the prompt; use it only after explicit consent.
+Rotation works when the config is mounted from the host (`install` and Compose
+do this). If the **server private key** has leaked, rotating obfuscation is not
+enough: the server key has to change in an agreed way and every client has to
+be reissued.

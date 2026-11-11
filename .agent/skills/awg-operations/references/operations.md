@@ -1,16 +1,16 @@
-# Эксплуатация, диагностика и сопровождение
+# Operations, diagnostics and upkeep
 
-## Содержание
+## Contents
 
-- [Выбор цели и обзор состояния](#выбор-цели-и-обзор-состояния)
-- [Диагностика по уровням](#диагностика-по-уровням)
-- [Утилиты узла и страницы](#утилиты-узла-и-страницы)
-- [Логи и секреты](#логи-и-секреты)
-- [Обновление и откат](#обновление-и-откат)
-- [Резервное копирование и восстановление](#резервное-копирование-и-восстановление)
-- [Карта исходников и проверки контрибьюта](#карта-исходников-и-проверки-контрибьюта)
+- [Choosing a target and an overview](#choosing-a-target-and-an-overview)
+- [Diagnostics by layer](#diagnostics-by-layer)
+- [Node utilities and pages](#node-utilities-and-pages)
+- [Logs and secrets](#logs-and-secrets)
+- [Updating and rolling back](#updating-and-rolling-back)
+- [Backup and restore](#backup-and-restore)
+- [Source map and contribution checks](#source-map-and-contribution-checks)
 
-## Выбор цели и обзор состояния
+## Choosing a target and an overview
 
 ```bash
 awg-tool status --local
@@ -20,160 +20,165 @@ awg-tool doctor --local --container awg-server
 awg-tool logs --server home --container awg31-server --lines 200
 ```
 
-Имена примеров замени фактическими. `status` выбирает контейнер через
-`--container`; `logs` и `doctor` принимают и позиционное имя. `auto` выбирает
-единственный узел AWG, исключая резолвер и страницы; если узлов несколько,
-нужно точное имя. Discovery опирается на образ и метку
-`space.vai-rice.awg.protocol`, а не на префикс имени: переименованный узел
-находится.
+Replace the example names with real ones. `status` picks a container with
+`--container`; `logs` and `doctor` also take a positional name. `auto` picks
+the only AWG node, leaving out the resolver and the pages; with several nodes
+an exact name is needed. Discovery goes by the image and the
+`space.vai-rice.awg.protocol` label, not by a name prefix: a renamed node is
+still found.
 
-Без `--server`, `--host` и `--local` цель выбирается так: единственный
-сохранённый профиль используется сам; при нескольких нужен выбор; если
-профилей нет, а на этой машине работают наши контейнеры, ответ идёт локально.
-`--local` явно выбирает эту машину. В local-режиме `--sudo` не меняет способ
-запуска Docker: текущему пользователю уже нужен согласованный доступ.
+Without `--server`, `--host` or `--local` the target is chosen like this: a
+single saved profile is used by itself; several need a choice; with no
+profiles and our containers running on this machine, the answer is local.
+`--local` picks this machine explicitly. In local mode `--sudo` does not change
+how Docker is run: the current user already needs agreed access.
 
-Удалённые команды (`status`, `doctor`, `logs`, `peer`, `dns`, `rotate`)
-смотрят контейнеры именно удалённого хоста. В версиях до 0.5.0 они по ошибке
-показывали локальный список: пустой ответ от старого бинарника не доказывает,
-что на VPS ничего нет. Проверь версию первой строкой `awg-tool --help`.
+Remote commands (`status`, `doctor`, `logs`, `peer`, `dns`, `rotate`) look at
+the containers of the remote host. Before 0.5.0 they wrongly showed the local
+list: an empty answer from an old binary does not prove the VPS is empty.
+Check the version on the first line of `awg-tool --help`.
 
-`status` показывает образ, состояние, порты, uptime, интерфейс, суммарные
-RX/TX и число когда-либо рукопожимавшихся peers. Это не список «кто сейчас
-онлайн»: выключенный телефон остаётся в счётчике. Для отдельных строк:
-`awg-tool peer list`, для состояния «активен, замолчал, не подключался»:
-`docker exec <узел> awg-watch`.
+`status` shows the image, state, ports, uptime, interface, total RX/TX and the
+number of peers that ever shook hands. It is not a "who is online now" list: a
+phone that is off stays in the count. For single rows: `awg-tool peer list`;
+for "active, went quiet, never connected": `docker exec <node> awg-watch`.
+Since 0.5.1 `status` skips the resolver and the pages instead of probing them.
 
-Интерфейс (`awg-tool` без аргументов) показывает то же на экране серверов:
-первой строкой docker этой машины, ниже сохранённые подключения. На узле:
-`p` peers, `+` выдать, `-` отозвать, `R` ротация, `d` диагностика, `L` журнал.
-На резолвере: `b`/`B`, `a`/`A`, `/` для поиска.
+The UI (`awg-tool` with no arguments) shows the same on the servers screen:
+this machine's Docker first, the saved connections below. On a node: `p`
+peers, `+` issue, `-` revoke, `R` rotate, `d` diagnose, `L` log. On the
+resolver: `b`/`B`, `a`/`A`, `/` to search.
 
-## Диагностика по уровням
+## Diagnostics by layer
 
-Начни с наблюдения без перезапуска. После включения клиента создай трафик:
-без него старый или нулевой handshake не всегда неисправность.
+Start by observing, without a restart. After the client is switched on, make
+some traffic: without it an old or zero handshake is not always a fault.
 
-| Уровень | Проверка | Что она доказывает |
+| Layer | Check | What it proves |
 |---|---|---|
-| Контейнер | `docker compose ps` или `docker ps -a` | Процесс запущен, порты опубликованы |
-| Интерфейс и UAPI | `docker exec <узел> awg-health` | Интерфейс поднят, UAPI отвечает; не реальный интернет |
-| Peers | `awg-tool peer list` | Адреса, публичные ключи, последний handshake |
-| Туннельные маршруты | `docker exec <узел> ip route` и `ip rule` | Маршруты и правила в нужном namespace |
-| DNS | `awg-tool dns`, запрос с клиента к `172.29.172.254` | Состояние резолвера и его достижимость по пути клиента |
-| Нужный сервис | трафик с реального клиента, `awg-tool under` | Работу конкретного маршрута, не всех путей |
+| Container | `docker compose ps` or `docker ps -a` | The process runs, ports are published |
+| Interface and UAPI | `docker exec <node> awg-health` | The interface is up, UAPI answers; not real internet |
+| Peers | `awg-tool peer list` | Addresses, public keys, last handshake |
+| Tunnel routes | `docker exec <node> ip route` and `ip rule` | Routes and rules in the right namespace |
+| DNS | `awg-tool dns`, a query from the client to `172.29.172.254` | The resolver's state and whether the client's path reaches it |
+| The wanted service | traffic from a real client, `awg-tool under` | That one route works, not every path |
 
-`doctor` добавляет evidence, confidence, alternatives и blind spots. Сохраняй
-это различие в ответе: `possible` не подтверждённая причина. Флага
-`--client-conf` нет. Если нужно сравнить обфускацию, проверь клиентский файл
-`awg-tool check` там, где он лежит, и сравни поля приватно; не проси вставить
-полный секретный конфиг в чат.
+`doctor` adds evidence, confidence, alternatives and blind spots. Keep that
+distinction in the answer: `possible` is not a confirmed cause. There is no
+`--client-conf` flag. To compare obfuscation, run `awg-tool check` on the
+client file where it lies and compare the fields privately; never ask for the
+full secret config in the chat.
 
-Характерные симптомы:
+Typical symptoms:
 
-| Симптом | Следующая минимальная проверка |
+| Symptom | Smallest next check |
 |---|---|
-| TUN или интерфейс отсутствует | TUN на хосте, mount `/dev/net/tun`, `NET_ADMIN`, ошибка старта |
-| Демон отклонил конфиг | Поколение образа, допустимые ключи и теги, `errno`; `awg-tool check` |
-| `HeaderProtectionKey` не распознаётся инструментом | Не применяй старый `awg setconf`; entrypoint переводит `.conf` в UAPI |
-| Peer `never`, устройство ещё не включали | Сначала включить и создать трафик, не менять сервер |
-| Нет handshake после трафика | Endpoint, UDP publish, firewall, NAT, ключи и PSK, обфускация и версия приложения |
-| Handshake есть, IP-трафика нет | `AllowedIPs` на обеих сторонах, IPv4 forwarding, NAT, маршруты и MTU |
-| IP работает, имена нет | DNS клиента, маршрут в сеть сервисов, доступ сервера к bridge резолвера, egress резолвера (`awg-tool dns`) |
-| DNS работает, `amiunder.vpn` нет | Маршрут `172.29.172.0/24` у split tunnel (старые конфиги с одним `/32`), работа контейнера страниц |
-| Новые peers пропали после пересоздания | Постоянный state-volume, `AWG_PEERS_DIR`, журнал восстановления |
-| Удалённый peer вернулся | Его `[Peer]` в постоянном `.conf` или запись в `peers.d` |
-| Крупные запросы зависают, мелкие проходят | Path MTU: `awg-mtu` на клиентском узле или страница `mtu.vpn`, не увеличение S/J |
-| Имя другого корня (`.geek`) не резолвится | `chain.conf` или `forward.d` резолвера, `awg-tool dns` (счётчики цепочки) |
+| TUN or the interface is missing | TUN on the host, the `/dev/net/tun` mount, `NET_ADMIN`, the start error |
+| The daemon refused the config | Image generation, allowed keys and tags, `errno`; `awg-tool check` |
+| A full-tunnel client refused on images before 0.5.1 | `fwmark` was written after the peers; update the image |
+| A tool does not know `HeaderProtectionKey` | Do not use the old `awg setconf`; the entrypoint turns the `.conf` into UAPI |
+| Peer `never`, the device was never switched on | Switch it on and make traffic first; do not change the server |
+| No handshake after traffic | Endpoint (not `SERVER_PUBLIC_IP`), UDP publish, firewall, NAT, keys and PSK, obfuscation and app version |
+| Handshake, but no IP traffic | `AllowedIPs` on both sides, IPv4 forwarding, NAT, routes and MTU |
+| IP works, names do not | Client DNS, the route to the services network, the server's access to the resolver bridge, the resolver's egress (`awg-tool dns`) |
+| The resolver does not start | `cap_add: [NET_BIND_SERVICE]` with `cap_drop: [ALL]`; images from 0.5.1 also start without it where Docker allows low ports |
+| DNS works, `amiunder.vpn` does not | The `172.29.172.0/24` route on a split tunnel (old configs with one `/32`), the pages container |
+| New peers vanished after a recreate | Persistent state volume, `AWG_PEERS_DIR`, the restore log |
+| A removed peer came back | Its `[Peer]` in the persistent `.conf` or a record in `peers.d` |
+| Big requests hang, small ones pass (TLS to large sites) | Path MTU: `awg-mtu` on the client node or the `mtu.vpn` page; on images from 0.5.1 a NAT node clamps TCP MSS (`AWG_MSS`); not bigger S/J |
+| AmneziaVPN site lists do nothing | `AllowedIPs` must hold both `0.0.0.0/0` and `::/0`; `awg-tool check` says so |
+| A `vpn://` link will not import into AmneziaVPN | Links from awg-tool before 0.5.1; reissue |
+| A name under another root (`.geek`) does not resolve | The resolver's `chain.conf` or `forward.d`, `awg-tool dns` (chain counters) |
 
-Нулевые счётчики DNAT хоста не доказывают отсутствие входящих пакетов: Docker
-proxy может передавать их другим путём. Старый handshake (doctor использует
-порог больше 300 секунд) не доказывает поломку выключенного клиента. Не убивай
-посторонний процесс на занятом UDP-порту.
+Zero DNAT counters on the host do not prove no packets come in: the Docker
+proxy can pass them another way. An old handshake (doctor's threshold is over
+300 seconds) does not prove a switched-off client is broken. Never kill a
+foreign process on a taken UDP port.
 
-## Утилиты узла и страницы
+## Node utilities and pages
 
 ```bash
-docker exec awg-client awg-under        # под VPN, и откуда это известно
-docker exec awg-client awg-leak         # утечки DNS, IPv6 и маршрутов
-docker exec awg-client awg-mtu          # самый большой проходящий пакет
-docker exec awg-server awg-watch        # активен, замолчал, не подключался
-awg-tool under                          # то же с компьютера пользователя
+docker exec awg-client awg-under        # under the VPN, and how that is known
+docker exec awg-client awg-leak         # DNS, IPv6 and route leaks
+docker exec awg-client awg-mtu          # the biggest packet that gets through
+docker exec awg-server awg-watch        # active, went quiet, never connected
+awg-tool under                          # the same from the user's computer
 ```
 
-`awg-under` проверяет страницу из **этого** namespace; на сервере она может
-быть доступна напрямую по bridge и не доказывает VPN на телефоне. Ответ
-содержит сигналы dns, system, page и ipv6, `--json` для скриптов.
+`awg-under` checks the page from **this** namespace; on the server it may be
+reachable straight over the bridge and proves nothing about a VPN on a phone.
+The answer carries dns, system, page and ipv6 signals; `--json` for scripts.
 
-`awg-leak` проверяет резолвер контейнера, что он отвечает, что это именно
-резолвер туннеля (спрашивает `resolver.vpn`: сеть, которая сама отвечает на
-DNS к любому адресу, иначе неотличима), канарейку DoH для Firefox и куда идёт
-трафик в интернет. Маршрут он спрашивает у ядра через `ip route get` для
-публичного адреса, то есть с учётом правил fwmark: полный туннель с отдельной
-таблицей, как его делает entrypoint, считается туннелем, хотя в основной
-таблице остаётся старый маршрут по умолчанию. IPv6-маршрут мимо полного
-IPv4-туннеля это утечка. Поле DNS в `.conf` само не меняет контейнерный
-`/etc/resolv.conf`: Docker resolver `127.0.0.11` на full tunnel остаётся
-обходным путём, и `awg-leak` это называет.
+`awg-leak` checks the container's resolver, that it answers, that it is the
+tunnel's own resolver (it asks for `resolver.vpn`: a network that answers DNS
+to any address is otherwise indistinguishable), the Firefox DoH canary, and
+where internet traffic goes. It asks the kernel for the route with
+`ip route get` to a public address, so fwmark rules count: a full tunnel with
+its own table, as the entrypoint makes it, counts as the tunnel even though the
+main table keeps the old default route. An IPv6 route around a full IPv4
+tunnel is a leak. The `DNS` field in a `.conf` does not change the container's
+`/etc/resolv.conf`: Docker's resolver `127.0.0.11` stays a way around a full
+tunnel, and `awg-leak` names it.
 
-`awg-mtu` пингует через туннель и ищет самый большой отвечающий размер; если
-он меньше MTU интерфейса, говорит, что поставить в конфиг (шагом 8).
-`AWG_MTU_MAX` проверяет выше MTU интерфейса, временно поднимая его.
+`awg-mtu` pings through the tunnel and finds the biggest size that answers; if
+it is below the interface MTU, it says what to put into the config (in steps of
+8). `AWG_MTU_MAX` tests above the interface MTU by raising it for a while.
 
-`awg-watch` по умолчанию работает в фоне каждого узла и пишет в журнал
+`awg-watch` runs in the background of every node by default and logs
 `peer-quiet`, `peer-back`, `peer-first-handshake`.
 
-Ни одна утилита не проверяет автоматически DoH, IPv6 и fallback на внешних
-устройствах. Для этого страницы: `amiunder.vpn`, `leak.vpn` (свежее имя,
-которое знает только резолвер туннеля), `mtu.vpn`, `speed.vpn`, `dns.vpn`,
-`node.vpn`. По адресу без DNS: `http://172.29.172.253/#leak`.
+No utility checks DoH, IPv6 and fallback on outside devices by itself. That is
+what the pages are for: `amiunder.vpn`, `leak.vpn` (a fresh name only the
+tunnel's resolver knows), `mtu.vpn`, `speed.vpn`, `dns.vpn`, `node.vpn`.
+Without DNS: `http://172.29.172.253/#leak`.
 
-## Логи и секреты
+## Logs and secrets
 
-`awg-tool logs` вычищает известные имена полей и формы ключей в библиотеке.
-Предпочитай его для первичного анализа. Это эвристическая очистка, а не
-гарантия удаления произвольного секрета. `--lines` по умолчанию 200;
-`--follow` и `--since` не реализованы.
+`awg-tool logs` scrubs known field names and key shapes in the library. Prefer
+it for a first look. It is a heuristic scrub, not a guarantee against an
+arbitrary secret. `--lines` defaults to 200; `--follow` and `--since` do not
+exist.
 
-Сырой `docker logs`, stdout и ошибки `install`, произвольные дампы конфигов и
-`vpn://` эту очистку не проходят. Не выполняй `awg-uapi get` в публичный
-транскрипт: UAPI возвращает приватный ключ, PSK и ключ защиты заголовков.
-Ответ `errno=0` не делает предшествующие строки безопасными для публикации.
+Raw `docker logs`, `install` stdout and errors, arbitrary config dumps and
+`vpn://` do not go through that scrub. Never run `awg-uapi get` into a public
+transcript: UAPI returns the private key, the PSK and the header protection
+key. An `errno=0` answer does not make the lines before it safe to publish.
 
-`awg-dump` собирает интерфейс, маршруты, UAPI, NAT и хвост событий; в нём нет
-`private_key` и `preshared_key`, а `header_protection_key` сокращён до
-`<set, N bytes>` (до 0.5.0 он попадал в дамп целиком: старый дамп 3.x считай
-секретным). Метки, адреса и публичные ключи в дампе остаются, поэтому перед
-публикацией согласуй, что из этого можно показывать.
+`awg-dump` collects the interface, routes, UAPI, NAT and the tail of the event
+log; it has no `private_key` or `preshared_key`, and `header_protection_key` is
+cut to `<set, N bytes>` (before 0.5.0 it went into the dump whole: treat an old
+3.x dump as secret). Labels, addresses and public keys stay in the dump, so
+agree on what may be shown before publishing it.
 
-`AWG_DUMP_REQUEST=1` пишет `/tmp/uapi-set.req` с приватным ключом. По
-умолчанию выключен; не включай без необходимости и согласования, после
-диагностики выключи и согласованно удали файл.
+`AWG_DUMP_REQUEST=1` writes `/tmp/uapi-set.req` with the private key. It is off
+by default; do not turn it on without need and agreement, and after diagnosing
+turn it off and remove the file as agreed.
 
-Журнал `/var/log/awg/events.log` дублируется в stderr: start, config-applied,
+The log `/var/log/awg/events.log` is copied to stderr: start, config-applied,
 peer-add, client-config-issued, peer-remove, peer-quiet, peer-back,
-peer-first-handshake, stop. Тел конфигов в нём нет; ротация на 256 KiB с одной
-старой копией. Метки, адреса, публичные ключи и история доступа остаются
-чувствительными метаданными: согласуй их удаление или маскирование перед
-внешней передачей.
+peer-first-handshake, stop. It holds no config bodies; it rotates at 256 KiB
+with one old copy. Labels, addresses, public keys and the access history are
+still sensitive metadata: agree on removing or masking them before handing
+them outside.
 
-## Обновление и откат
+## Updating and rolling back
 
-`awg-tool update` это **проверка**, не загрузка и не установка. Без
-`--server`/`--host` проверяется версия CLI на GitHub; с ними ещё и образы
-узлов. Запросы идут по HTTPS с машины CLI к GitHub и Docker Hub; сетевые ошибки
-и локальный образ без RepoDigest дают `Unknown`, а не доказательство
-актуальности.
+`awg-tool update` is a **check**, not a download and not an install. Without
+`--server`/`--host` it checks the CLI version on GitHub; with them, the nodes'
+images too. Requests go over HTTPS from the CLI's machine to GitHub and Docker
+Hub; network errors and a local image without a RepoDigest give `Unknown`, not
+proof of being current.
 
-Для настоящего обновления:
+For a real update:
 
-1. Определи источник развёртывания: Compose или `docker run` от install.
-   Зафиксируй текущий digest образа и описание контейнера без публикации
-   секретов. Плавающий `latest` не годится как единственная точка отката.
-2. Согласуй окно обрыва, сделай защищённую копию конфигов и state, обеспечь
-   доступ к старому образу. Обновляй патч текущего поколения; переход между
-   поколениями это отдельная миграция клиентов и конфигурации.
-3. Для Compose после согласования из каталога развёртывания:
+1. Find how it was deployed: Compose or install's `docker run`. Record the
+   current image digest and the container description without publishing
+   secrets. A floating `latest` is not good enough as the only rollback point.
+2. Agree on an outage window, make a protected copy of the configs and state,
+   and keep the old image reachable. Update within the current generation's
+   patch line; moving between generations is a separate migration of clients
+   and configs.
+3. For Compose, after agreement, from the deployment directory:
 
    ```bash
    docker compose pull server
@@ -181,67 +186,74 @@ peer-first-handshake, stop. Тел конфигов в нём нет; ротац
    docker compose exec -T server awg-health
    ```
 
-   `pull` скачивает, `up` пересоздаёт с прежними mounts и volumes. Не добавляй
-   `down -v` и не перезапускай все соседние сервисы без причины.
-4. Для установки через `docker run` восстанови точные mounts, env, ports,
-   sysctls, volumes и restart policy из `docker inspect`. Не выдавай
-   универсальный `docker run` с пустым состоянием за «обновление» и не
-   используй повторный `awg-tool install`: он меняет ключи и конфиг.
-5. Проверь реального клиента, handshake и счётчики, DNS и нужный трафик. При
-   отказе верни прежний закреплённый образ и согласованный комплект конфигов
-   со state; повтори проверки. Откат образа не автоматический (автоматически
-   откатывается только `rotate`).
+   `pull` downloads, `up` recreates with the same mounts and volumes. Never add
+   `down -v`, and do not restart every neighbouring service without a reason.
+4. For an install made with `docker run`, rebuild the exact mounts, env,
+   ports, sysctls, volumes and restart policy from `docker inspect`. Do not pass
+   off a generic `docker run` with empty state as an "update", and never use a
+   repeat `awg-tool install`: it changes keys and the config.
+5. Check a real client, the handshake and counters, DNS and the wanted traffic.
+   On failure, bring back the old pinned image and the agreed set of configs
+   and state; repeat the checks. Image rollback is not automatic (only `rotate`
+   rolls back by itself).
 
-## Резервное копирование и восстановление
+If an old node carries a manual workaround that a new image now does itself
+(for example a hand-made TCPMSS rule, done by the entrypoint since 0.5.1),
+remove the manual one after the update, or the rule exists twice.
 
-Отдельных `backup` и `restore` в CLI нет. Используй штатные средства файловой
-системы и Docker, не добавляя проекту новые shell-обвязки.
+## Backup and restore
 
-Сохрани согласованный набор:
+The CLI has no `backup` or `restore`. Use the usual filesystem and Docker
+tools; do not add new shell wrappers to the project.
 
-- серверный `server.conf` и приватный ключ сервера (`/etc/amnezia/awg<поколение>`
-  для install либо свои bind mounts для Compose) и резервные копии
-  `*.bak-*`, оставленные `rotate`;
-- state-volume (`peers.d`, PSK, счётчик запусков); при параллельном изменении
-  peers копия может быть несогласованной, поэтому на время копии запрети
-  изменения либо согласуй остановку;
-- тома резолвера (`awg-dns-state` со списками `awg-tool dns`) и каталог
-  `/etc/awg-dns` с вашими списками, записями, зонами и `chain.conf`;
-- файл развёртывания, digest образа, ports, env, sysctls, топологию сетей;
-- нужный по политике log-volume, с учётом чувствительности истории доступа;
-- клиентские `.conf` и ссылки в отдельном защищённом хранилище, если нужен
-  повторный импорт: сервер не хранит приватные ключи клиентов;
-- `profiles.json`, `known_hosts` и, только по решению пользователя,
-  `secrets.json` при переносе рабочего места оператора.
+Keep one consistent set:
 
-Копия это секрет, включая PSK и HeaderProtectionKey. Не прикладывай её к
-контрибьюту и не храни в checkout. Восстанавливай с прежними правами, тем же
-ключом сервера и нужными volumes; пустой новый контейнер с тем же именем это не
-восстановление. Проверь peers и реального клиента до объявления успеха. Не
-удаляй оригиналы до проверенного восстановления.
+- the server's `server.conf` and private key (`/etc/amnezia/awg<generation>`
+  for install, or your own bind mounts for Compose) and the `*.bak-*` copies
+  `rotate` left;
+- the state volume (`peers.d`, PSKs, the start counter); while peers change
+  the copy can be inconsistent, so block changes during the copy or agree on a
+  stop;
+- the resolver's volumes (`awg-dns-state` with the `awg-tool dns` lists) and
+  the `/etc/awg-dns` directory with your lists, records, zones and
+  `chain.conf`;
+- the deployment file, the image digest, ports, env, sysctls, the network
+  layout;
+- the log volume if policy needs it, minding how sensitive the access history
+  is;
+- client `.conf`s and links in a separate protected store if they may need
+  importing again: the server does not keep client private keys;
+- `profiles.json`, `known_hosts` and, only if the user decides so,
+  `secrets.json` when moving the operator's workstation.
 
-## Карта исходников и проверки контрибьюта
+The copy is a secret, PSKs and HeaderProtectionKey included. Never attach it
+to a contribution and never keep it in the checkout. Restore with the same
+permissions, the same server key and the needed volumes; an empty new container
+with the same name is not a restore. Check the peers and a real client before
+calling it done. Do not delete the originals before a verified restore.
 
-| Путь от корня | Область |
+## Source map and contribution checks
+
+| Path from the root | Area |
 |---|---|
-| `crates/awg-cli/src/main.rs` | Команды, ручной парсер, генерация, check, sets, hosts, under |
-| `crates/awg-cli/src/ops.rs` | install, status/doctor/logs/update, peer, dns, rotate, servers, выбор цели |
-| `crates/awg-cli/src/remote.rs` | Разбор цели, доверие к ключу хоста, запрос паролей |
-| `crates/awg-cli/src/tui.rs`, `tui/servers.rs` | Интерфейс и экран серверов |
-| `crates/awg-core/src/versions.rs`, `engines.rs`, `presets.rs` | Поколения, клиенты, движки, пресеты, ограничения генератора |
-| `crates/awg-core/src/check.rs` | Проверка готовых конфигов |
-| `crates/awg-core/src/mimic/` | Профили мимикрии и база хостов |
-| `crates/awg-core/src/deploy/` и `deploy.rs` | Рендер `.conf`, значения по умолчанию, survey, развёртывание |
-| `crates/awg-core/src/profile.rs`, `ssh.rs` | Профили подключений, хранилище паролей, SSH |
-| `crates/awg-core/src/docker/` | Discovery, health, peers, dns, rotate, redaction, диагностика |
-| `crates/awg-core/src/vpn.rs`, `update/`, `under.rs` | Ссылка vpn://, проверки обновлений, under |
-| `containers/entrypoint.sh`, `awg-peer`, `awg-*` | Запуск через UAPI, сеть, peers, утилиты узла |
-| `containers/entrypoint-dns.sh`, `unbound.conf`, `dns-chain/` | Резолвер, списки, зоны, цепочка |
-| `containers/status-www/` | Страницы .vpn и их CGI |
-| `containers/docker-compose.yml`, `README.md` | Пример топологии и контейнерная справка |
-| `CONTRIBUTING.md`, `RU.CONTRIBUTING.MD` | Правила вклада и проверок |
+| `crates/awg-cli/src/main.rs` | Commands, the hand-written parser, gen, check, sets, hosts, under |
+| `crates/awg-cli/src/ops.rs` | install, status/doctor/logs/update, peer, dns, rotate, servers, target choice |
+| `crates/awg-cli/src/remote.rs` | Target parsing, host key trust, password prompts |
+| `crates/awg-cli/src/tui.rs`, `tui/servers.rs` | The UI and the servers screen |
+| `crates/awg-core/src/versions.rs`, `engines.rs`, `presets.rs` | Generations, clients, engines, presets, generator limits |
+| `crates/awg-core/src/check.rs` | Checking finished configs, client quirk warnings |
+| `crates/awg-core/src/mimic/` | Mimicry profiles and the host database |
+| `crates/awg-core/src/deploy/` and `deploy.rs` | Rendering `.conf`, defaults, survey, deployment |
+| `crates/awg-core/src/profile.rs`, `ssh.rs` | Connection profiles, password store, SSH |
+| `crates/awg-core/src/docker/` | Discovery, health, peers, dns, rotate, redaction, diagnostics |
+| `crates/awg-core/src/vpn.rs`, `update/`, `under.rs` | The vpn:// link (AmneziaVPN's own import format), update checks, under |
+| `containers/entrypoint.sh`, `awg-peer`, `awg-*` | Start through UAPI, network and MSS clamp, peers, node utilities |
+| `containers/entrypoint-dns.sh`, `unbound.conf`, `dns-chain/` | Resolver, lists, zones, chain |
+| `containers/status-www/` | The .vpn pages and their CGIs |
+| `containers/docker-compose.yml`, `README.md` | Example topology and the container reference |
+| `CONTRIBUTING.md`, `RU.CONTRIBUTING.MD` | Contribution and check rules |
 
-Для изменений Rust штатные проверки из корня:
+For Rust changes, the standard checks from the root:
 
 ```bash
 cargo fmt --all --check
@@ -249,15 +261,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Для изменений контейнеров используй **уже имеющиеся** `containers/selftest.sh`,
-`utiltest.sh`, `dnstest.sh`, `paralleltest.sh`. Это реальные туннели и трафик:
-им нужны Docker, TUN, привилегии и отдельное безопасное окружение
-(`AWG_IMAGE_PREFIX` для своих образов). Не запускай их на чужом production-хосте
-и не объявляй пройденными по чтению README. Изменение одной справки не требует
-развёртывания VPN: проверь ссылки, реальные команды безопасной части CLI и
-сценарии ответов агента.
+For container changes use the **existing** `containers/selftest.sh`,
+`utiltest.sh`, `dnstest.sh`, `paralleltest.sh`. They run real tunnels and
+traffic: they need Docker, TUN, privileges and a separate safe environment
+(`AWG_IMAGE_PREFIX` for your own images). The `Live tunnel tests` workflow runs
+them on GitHub on every generation. Never run them on someone else's
+production host, and never call them passed from reading the README. A docs-only
+change needs no VPN deployment: check the links, the real commands of the safe
+part of the CLI, and the agent answer scenarios.
 
-Обновляй справку при изменении публичного поведения. Не закрепляй текущее
-ограничение как вечный контракт: перед эксплуатацией сверь исходники. В этом
-навыке нет дополнительных скриптов; команды используют существующие
-инструменты.
+Update the reference when public behaviour changes. Do not freeze a current
+limit as a permanent contract: check the source before operating. This skill
+has no extra scripts; the commands use the existing tools.
