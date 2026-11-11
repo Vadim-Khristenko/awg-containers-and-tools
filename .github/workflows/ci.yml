@@ -100,8 +100,20 @@ jobs:
           build-args: |
             AWG_VERSION=${{ matrix.awg }}
             AWG_GO_VERSION=${{ matrix.go }}
+          load: true
+          tags: scan/${{ matrix.image }}:ci
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      # A high or critical CVE with a fix out fails the build: the image would
+      # ship a hole someone already closed. Pinned by commit, since a moved tag
+      # is how a scanner becomes the attack.
+      - uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: scan/${{ matrix.image }}:ci
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
 
   dns-image:
     name: Build amnezia-wg-dns
@@ -114,8 +126,16 @@ jobs:
           context: containers
           file: containers/Dockerfile.dns
           push: false
+          load: true
+          tags: scan/amnezia-wg-dns:ci
           cache-from: type=gha,scope=dns
           cache-to: type=gha,mode=max,scope=dns
+      - uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: scan/amnezia-wg-dns:ci
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
 
   status-image:
     name: Build amnezia-wg-status
@@ -128,8 +148,16 @@ jobs:
           context: containers
           file: containers/Dockerfile.status
           push: false
+          load: true
+          tags: scan/amnezia-wg-status:ci
           cache-from: type=gha,scope=status
           cache-to: type=gha,mode=max,scope=status
+      - uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: scan/amnezia-wg-status:ci
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
 
   # The release publishes every image for amd64 and arm64, but building all
   # five under emulation on every push would triple the image job for little:
