@@ -338,12 +338,16 @@ if [ "$FULL_TUNNEL" = 1 ]; then
         RULED+=("$fam")
     done
     # A rule without a priority goes above the ones already there, so the
-    # bypasses are read before the tunnel's own. A family without a tunnel
-    # rule needs none.
+    # bypasses are read before the tunnel's own. When main has no route for
+    # the range (no IPv6 outside, say) the lookup falls through to the next
+    # rule, which is the tunnel; the unreachable rule under it stops that.
+    # So an excluded range never enters the tunnel. A family without a
+    # tunnel rule needs none of this.
     for cidr in ${EXCLUDE[@]+"${EXCLUDE[@]}"}; do
         fam=-4; case "$cidr" in *:*) fam=-6 ;; esac
         case " ${RULED[*]} " in *" $fam "*) : ;; *) continue ;; esac
-        ip "$fam" rule add to "$cidr" table main || die "AWG_EXCLUDE: ip refused $cidr (host bits set?)"
+        ip "$fam" rule add to "$cidr" unreachable || die "AWG_EXCLUDE: ip refused $cidr (host bits set?)"
+        ip "$fam" rule add to "$cidr" table main
         BYPASS+=("$fam" "$cidr")
     done
     if [ "${#EXCLUDE[@]}" -gt 0 ]; then log "kept off the tunnel: $AWG_EXCLUDE"; fi
@@ -451,6 +455,7 @@ shutdown() {
     set -- ${BYPASS[@]+"${BYPASS[@]}"}
     while [ "$#" -ge 2 ]; do
         ip "$1" rule del to "$2" table main 2>/dev/null || true
+        ip "$1" rule del to "$2" unreachable 2>/dev/null || true
         shift 2
     done
     for fam in ${RULED[@]+"${RULED[@]}"}; do

@@ -210,6 +210,7 @@ echo "route to 192.0.2.1: $route"
 grep -q "dev eth0" <<< "$route"; check $? "an excluded IPv4 range leaves through eth0"
 docker exec "$FULL" ip -6 rule 2>/dev/null | grep -q "to $X6 lookup main"; check $? "an excluded IPv6 range has its bypass rule"
 route6=$(docker exec "$FULL" ip -6 route get 2001:db8:ffff::1 2>&1)
+echo "route to 2001:db8:ffff::1: $route6"
 ! grep -q "dev ${AWG_IFACE:-awg0}" <<< "$route6"; check $? "an excluded IPv6 address stays out of the tunnel"
 route=$(docker exec "$FULL" ip route get 10.99.0.1 2>&1)
 grep -q "dev ${AWG_IFACE:-awg0}" <<< "$route"; check $? "the resolver in DNS = stays in the tunnel"
