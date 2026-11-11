@@ -238,7 +238,7 @@ back if it does not come up.
 | `AWG_ENDPOINT` | `$AWG_PUBLIC_HOST:<port>` | what `awg-peer` writes into issued configs, port included; wins over `AWG_PUBLIC_HOST` |
 | `AWG_CLIENT_DNS` | `172.29.172.254` | resolver for issued configs |
 | `AWG_SERVICES_NET` | the resolver's `/24` | the resolver and the pages, routed into the tunnel by issued configs |
-| `AWG_CLIENT_ALLOWED` | `<tunnel>/24, <services>/24` | `AllowedIPs` for issued configs |
+| `AWG_CLIENT_ALLOWED` | `<tunnel>/24, <services>/24` | `AllowedIPs` for issued configs. A full tunnel is `0.0.0.0/0, ::/0`: with only one of them AmneziaVPN ignores its site lists, and `awg-peer` says so |
 | `AWG_NAMES_FILE` | `/var/lib/awg-names/names.hosts` | peer names for the resolver, and the node's facts beside it |
 | `AWG_WATCH` | `on` | `off` leaves `awg-watch` out |
 | `AWG_WATCH_QUIET` | `600` | seconds without a handshake before a peer counts as quiet |

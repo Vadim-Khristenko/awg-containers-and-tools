@@ -334,6 +334,19 @@ rev=$(awk -F. '{print $4"."$3"."$2"."$1}' <<< "${phone_ip:-0.0.0.0}")
 ask -type=PTR "$rev.in-addr.arpa" | grep -q 'phone.peer.vpn'
 check $? "and its address reads back as phone.peer.vpn"
 
+# AmneziaVPN drops its site lists unless both default routes are there, so a
+# full tunnel on one family is worth a word at issue time, and only then.
+half=$(docker exec -e AWG_ENDPOINT=172.31.98.10:51820 -e AWG_CLIENT_ALLOWED=0.0.0.0/0 \
+    "$SRV" awg-peer add half 2>&1 >/dev/null)
+grep -q '^!! AllowedIPs holds one default route' <<< "$half"
+check $? "awg-peer warns when a full tunnel has 0.0.0.0/0 without ::/0"
+both=$(docker exec -e AWG_ENDPOINT=172.31.98.10:51820 -e 'AWG_CLIENT_ALLOWED=0.0.0.0/0, ::/0' \
+    "$SRV" awg-peer add both 2>&1 >/dev/null)
+grep -q '^!!' <<< "$both"; [ $? != 0 ]
+check $? "...and stays quiet when both default routes are there"
+docker exec "$SRV" awg-peer rm half >/dev/null 2>&1
+docker exec "$SRV" awg-peer rm both >/dev/null 2>&1
+
 # DIRECTION 8: the other .vpn pages, through the tunnel. The page itself is
 # one script that picks by name; what is tested here is what it reads.
 hr "DIRECTION 8: dns, node, speed and mtu pages, through the tunnel"

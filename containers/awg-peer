@@ -170,6 +170,14 @@ EOF
         SERVER_PUBLIC_IP:*)
             printf '!! the Endpoint is a placeholder: put the server address in it, or set AWG_PUBLIC_HOST on this node\n' >&2 ;;
     esac
+    # AmneziaVPN applies its site lists only when both default routes are
+    # there, and drops them without a word otherwise.
+    local v4 v6 routes=",$(printf '%s' "${AWG_CLIENT_ALLOWED:-}" | tr -d ' '),"
+    case "$routes" in *,0.0.0.0/0,*) v4=1 ;; *) v4=0 ;; esac
+    case "$routes" in *,::/0,*) v6=1 ;; *) v6=0 ;; esac
+    if [ "$v4" != "$v6" ]; then
+        printf '!! AllowedIPs holds one default route of two: AmneziaVPN then ignores its site lists; a full tunnel is "0.0.0.0/0, ::/0"\n' >&2
+    fi
 }
 
 # --- list --------------------------------------------------------------------
