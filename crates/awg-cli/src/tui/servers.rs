@@ -489,7 +489,7 @@ impl Servers {
     fn add_peer(&mut self, label: &str, lang: Lang) {
         let Some(host) = self.host() else { return };
         let Some(node) = self.node() else { return };
-        let conf = match docker::peers::add(&host, &node, label, None) {
+        let conf = match docker::peers::add(&host, &node, label, None, &[]) {
             Ok(c) => c,
             Err(e) => {
                 let line = Line::from(Span::styled(e.to_string(), theme::error()));

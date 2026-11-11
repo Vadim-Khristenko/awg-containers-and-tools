@@ -347,6 +347,20 @@ check $? "...and stays quiet when both default routes are there"
 docker exec "$SRV" awg-peer rm half >/dev/null 2>&1
 docker exec "$SRV" awg-peer rm both >/dev/null 2>&1
 
+# AWG_CLIENT_EXCLUDE: a full tunnel with a hole in it, and never a hole over
+# the resolver. The expected list is the one exclude.rs tests.
+lan=$(docker exec -e AWG_ENDPOINT=172.31.98.10:51820 -e AWG_CLIENT_EXCLUDE=192.168.0.0/16 \
+    "$SRV" awg-peer add lan 2>/dev/null)
+grep -qx 'AllowedIPs = 0.0.0.0/1,128.0.0.0/2,192.0.0.0/9,192.128.0.0/11,192.160.0.0/13,192.169.0.0/16,192.170.0.0/15,192.172.0.0/14,192.176.0.0/12,192.192.0.0/10,193.0.0.0/8,194.0.0.0/7,196.0.0.0/6,200.0.0.0/5,208.0.0.0/4,224.0.0.0/3,::/0' <<< "$lan"
+check $? "awg-peer cuts an excluded range out of a full tunnel"
+over=$(docker exec -e AWG_ENDPOINT=172.31.98.10:51820 -e "AWG_CLIENT_EXCLUDE=${RESOLVER%.*}.0/24" \
+    "$SRV" awg-peer add over 2>&1); rc=$?
+[ "$rc" != 0 ] && grep -q 'covers the resolver' <<< "$over"
+check $? "...and refuses an exclusion over the resolver"
+docker exec "$SRV" awg-peer list 2>/dev/null | grep -q '^over '; [ $? != 0 ]
+check $? "...before the daemon hears of the peer"
+docker exec "$SRV" awg-peer rm lan >/dev/null 2>&1
+
 # DIRECTION 8: the other .vpn pages, through the tunnel. The page itself is
 # one script that picks by name; what is tested here is what it reads.
 hr "DIRECTION 8: dns, node, speed and mtu pages, through the tunnel"

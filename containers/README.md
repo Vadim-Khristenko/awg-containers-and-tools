@@ -228,7 +228,8 @@ back if it does not come up.
 | `AWG_IFACE` | `awg0` | interface name |
 | `AWG_CONF` | `/etc/amnezia/awg/$AWG_IFACE.conf` | config path |
 | `AWG_NAT` | `auto` | `auto` = MASQUERADE when the config has a `ListenPort` |
-| `AWG_FWMARK` / `AWG_TABLE` | the `ListenPort` | only used for a `0.0.0.0/0` client |
+| `AWG_FWMARK` / `AWG_TABLE` | the `ListenPort` | only used for a `0.0.0.0/0` or `::/0` client |
+| `AWG_EXCLUDE` | unset | a full-tunnel client container keeps these CIDRs on `eth0`, with `ip rule` bypasses above the tunnel's rules; it refuses to start when they cover a `DNS =` address |
 | `AWG_MSS` | `auto` | with NAT on, forwarded TCP is held to `MTU - 40` both ways, so a client that ignores the config's MTU still gets segments that fit; `off`, or a number |
 | `AWG_SOCK_DIR` | `/var/run/amneziawg` | UAPI socket directory |
 | `AWG_STATE_DIR` | `/var/lib/awg` | boot counter and `peers.d` |
@@ -239,6 +240,7 @@ back if it does not come up.
 | `AWG_CLIENT_DNS` | `172.29.172.254` | resolver for issued configs |
 | `AWG_SERVICES_NET` | the resolver's `/24` | the resolver and the pages, routed into the tunnel by issued configs |
 | `AWG_CLIENT_ALLOWED` | `<tunnel>/24, <services>/24` | `AllowedIPs` for issued configs. A full tunnel is `0.0.0.0/0, ::/0`: with only one of them AmneziaVPN ignores its site lists, and `awg-peer` says so |
+| `AWG_CLIENT_EXCLUDE` | unset | CIDRs a full tunnel keeps off: issued configs get `0.0.0.0/0, ::/0` minus these (`awg-exclude` computes the list). Refused together with `AWG_CLIENT_ALLOWED`, and refused when it covers the resolver |
 | `AWG_NAMES_FILE` | `/var/lib/awg-names/names.hosts` | peer names for the resolver, and the node's facts beside it |
 | `AWG_WATCH` | `on` | `off` leaves `awg-watch` out |
 | `AWG_WATCH_QUIET` | `600` | seconds without a handshake before a peer counts as quiet |

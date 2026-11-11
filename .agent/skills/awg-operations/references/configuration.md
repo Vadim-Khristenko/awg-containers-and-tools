@@ -238,6 +238,7 @@ Compose; `awg-tool install` flags are a different interface.
 | `AWG_NAT` | `auto` | `on`/`off`; `auto` turns NAT on when there is a `ListenPort` |
 | `AWG_MSS` | `auto` | With NAT, holds forwarded TCP MSS to the tunnel MTU (MTU minus 40); a number sets its own value, `off` turns it off |
 | `AWG_FWMARK`, `AWG_TABLE` | `ListenPort`, else `51820` | Mark and table for a client's default route |
+| `AWG_EXCLUDE` | unset | Client container with a full tunnel: these CIDRs stay on `eth0` (`ip rule` bypasses above the tunnel's rules). Refuses to start when they cover a `DNS =` address |
 | `AWG_STATE_DIR` | `/var/lib/awg` | Start counter and peer restore |
 | `AWG_PEERS_DIR` | see below | Directory of dynamic peer records |
 | `AWG_EVENT_LOG` | `/var/log/awg/events.log` | Event log |
@@ -247,6 +248,7 @@ Compose; `awg-tool install` flags are a different interface.
 | `AWG_CLIENT_DNS` | `172.29.172.254` | DNS in the issued client `.conf` |
 | `AWG_SERVICES_NET` | the resolver's `/24` | Resolver and pages network routed into the tunnel |
 | `AWG_CLIENT_ALLOWED` | `<tunnel>/24, <services>/24` | Routes in the issued client `.conf`. A full tunnel is `0.0.0.0/0, ::/0`: with only one of them AmneziaVPN silently skips its site lists, and `awg-peer` warns |
+| `AWG_CLIENT_EXCLUDE` | unset | CIDRs kept off a full tunnel: the issued `.conf` gets `0.0.0.0/0, ::/0` minus these. Not together with `AWG_CLIENT_ALLOWED`; refused when it covers the resolver |
 | `AWG_NAMES_FILE` | `/var/lib/awg-names/names.hosts` | Peer names for the resolver, with node facts next to it |
 | `AWG_WATCH` | `on` | `off` stops the background `awg-watch` |
 | `AWG_WATCH_QUIET` | `600` | Seconds without a handshake before "went quiet" |

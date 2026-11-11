@@ -241,6 +241,22 @@ done
 if [ "$FULL_TUNNEL" = 1 ]; then REQ+=("fwmark=$FWMARK"); fi
 REQ+=("replace_peers=true" ${PREQ[@]+"${PREQ[@]}"})
 
+# AWG_EXCLUDE: CIDRs a full tunnel keeps off, checked before anything is
+# applied, so a refusal leaves no peer behind. The tunnel's resolver must stay
+# in the tunnel, or DNS leaves in the clear.
+EXCLUDE=()
+if [ -n "${AWG_EXCLUDE:-}" ]; then
+    _without=$(awg-exclude "$AWG_EXCLUDE") || die "AWG_EXCLUDE: not a CIDR list"
+    IFS=', ' read -ra EXCLUDE <<< "$AWG_EXCLUDE"
+    IFS=', ' read -ra _dns <<< "${IF[DNS]:-}"
+    for d in ${_dns[@]+"${_dns[@]}"}; do
+        case "$d" in *[!0-9A-Fa-f.:]*|"") continue ;; esac
+        if [ "$_without" = "$(awg-exclude "$AWG_EXCLUDE" "$d")" ]; then
+            die "AWG_EXCLUDE covers the resolver $d: DNS would leave the tunnel"
+        fi
+    done
+fi
+
 # --- apply -------------------------------------------------------------------
 if [ "${AWG_DUMP_REQUEST:-0}" = 1 ]; then
     # Contains the private key in clear, so it is opt-in and for debugging only.
@@ -306,7 +322,7 @@ for a in "${_addrs[@]}"; do
 done
 ip link set up dev "$IFACE"
 
-RULED=()
+RULED=() BYPASS=()
 if [ "$FULL_TUNNEL" = 1 ]; then
     # awg-quick's routing, minus the parts that need the tools, per family.
     for fam in "${FULL_FAMILIES[@]}"; do
@@ -321,11 +337,24 @@ if [ "$FULL_TUNNEL" = 1 ]; then
         ip "$fam" rule add table main suppress_prefixlength 0
         RULED+=("$fam")
     done
+    # A rule without a priority goes above the ones already there, so the
+    # bypasses are read before the tunnel's own. A family without a tunnel
+    # rule needs none.
+    for cidr in ${EXCLUDE[@]+"${EXCLUDE[@]}"}; do
+        fam=-4; case "$cidr" in *:*) fam=-6 ;; esac
+        case " ${RULED[*]} " in *" $fam "*) : ;; *) continue ;; esac
+        ip "$fam" rule add to "$cidr" table main || die "AWG_EXCLUDE: ip refused $cidr (host bits set?)"
+        BYPASS+=("$fam" "$cidr")
+    done
+    if [ "${#EXCLUDE[@]}" -gt 0 ]; then log "kept off the tunnel: $AWG_EXCLUDE"; fi
     sysctl -q -w net.ipv4.conf.all.src_valid_mark=1 2>/dev/null || true
 else
     for cidr in ${ALLOWED[@]+"${ALLOWED[@]}"}; do
         ip route replace "$cidr" dev "$IFACE" 2>/dev/null || true
     done
+    if [ -n "${AWG_EXCLUDE:-}" ]; then
+        log "AWG_EXCLUDE ignored: AllowedIPs has no default route to keep anything off"
+    fi
 fi
 
 do_nat=0
@@ -419,6 +448,11 @@ shutdown() {
     trap - TERM INT EXIT
     awg_event stop
     if [ -n "$WATCH" ]; then kill "$WATCH" 2>/dev/null || true; fi
+    set -- ${BYPASS[@]+"${BYPASS[@]}"}
+    while [ "$#" -ge 2 ]; do
+        ip "$1" rule del to "$2" table main 2>/dev/null || true
+        shift 2
+    done
     for fam in ${RULED[@]+"${RULED[@]}"}; do
         ip "$fam" rule del table main suppress_prefixlength 0 2>/dev/null || true
         ip "$fam" rule del not fwmark "$FWMARK" table "$RTABLE" 2>/dev/null || true

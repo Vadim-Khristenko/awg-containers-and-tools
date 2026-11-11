@@ -83,7 +83,8 @@ EOF
 # The same client with the default route through the tunnel. It runs only
 # after the first client is gone, so the server sees one peer roam, not two
 # fight over one key.
-sed 's|^AllowedIPs = 10.99.0.0/24$|AllowedIPs = 0.0.0.0/0, ::/0|' "$WORK/client.conf" > "$WORK/full.conf"
+sed -e 's|^AllowedIPs = 10.99.0.0/24$|AllowedIPs = 0.0.0.0/0, ::/0|' \
+    -e 's|^MTU = 1280$|MTU = 1280\nDNS = 10.99.0.1|' "$WORK/client.conf" > "$WORK/full.conf"
 chmod 644 "$WORK"/*.conf; chmod 755 "$WORK"
 
 hr "containers"
@@ -180,11 +181,14 @@ docker rm -f "$CLI" >/dev/null 2>&1
 # where the entrypoint writes fwmark and policy rules. fwmark is a device key:
 # written after a peer block the daemon refuses the whole set.
 hr "PROOF 5: a full-tunnel client"
-# Both families on, so ::/0 has somewhere to go.
+# Both families on, so ::/0 has somewhere to go, and two ranges kept off the
+# tunnel (TEST-NET-1 and a documentation /48).
+X4=192.0.2.0/24 X6=2001:db8:ffff::/48
 docker run -d --name "$FULL" --network "$NET" --ip 172.31.99.12 \
     --cap-add NET_ADMIN --device /dev/net/tun \
     --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv6.conf.default.disable_ipv6=0 \
-    -e AWG_DUMP_REQUEST=1 -v "$WORK/full.conf:/etc/amnezia/awg/awg0.conf:ro" \
+    -e AWG_DUMP_REQUEST=1 -e AWG_EXCLUDE="$X4, $X6" \
+    -v "$WORK/full.conf:/etc/amnezia/awg/awg0.conf:ro" \
     "$IMG" >/dev/null || exit 1
 sleep 6
 docker logs "$FULL" 2>&1 | grep -E '^(>>|!!)'
@@ -199,6 +203,19 @@ docker exec "$FULL" ping -c 4 -W 3 10.99.0.1 >/dev/null 2>&1; check $? "full-tun
 route6=$(docker exec "$FULL" ip -6 route get 2001:db8::1 2>&1)
 echo "route to 2001:db8::1: $route6"
 grep -q "dev ${AWG_IFACE:-awg0}" <<< "$route6"; check $? "full-tunnel client routes IPv6 into the tunnel"
+
+hr "PROOF 6: exclusions"
+route=$(docker exec "$FULL" ip route get 192.0.2.1 2>&1)
+echo "route to 192.0.2.1: $route"
+grep -q "dev eth0" <<< "$route"; check $? "an excluded IPv4 range leaves through eth0"
+docker exec "$FULL" ip -6 rule 2>/dev/null | grep -q "to $X6 lookup main"; check $? "an excluded IPv6 range has its bypass rule"
+route6=$(docker exec "$FULL" ip -6 route get 2001:db8:ffff::1 2>&1)
+! grep -q "dev ${AWG_IFACE:-awg0}" <<< "$route6"; check $? "an excluded IPv6 address stays out of the tunnel"
+route=$(docker exec "$FULL" ip route get 10.99.0.1 2>&1)
+grep -q "dev ${AWG_IFACE:-awg0}" <<< "$route"; check $? "the resolver in DNS = stays in the tunnel"
+out=$(timeout 30 docker run --rm --cap-add NET_ADMIN --device /dev/net/tun --network "$NET" \
+    -e AWG_EXCLUDE=10.99.0.0/24 -v "$WORK/full.conf:/etc/amnezia/awg/awg0.conf:ro" "$IMG" 2>&1)
+grep -q "covers the resolver 10.99.0.1" <<< "$out"; check $? "an exclusion over the resolver is refused"
 
 hr "RESULT"
 if [ "$FAIL" = 0 ]; then echo "AWG $V: all checks passed"; else echo "AWG $V: FAILURES above"; fi

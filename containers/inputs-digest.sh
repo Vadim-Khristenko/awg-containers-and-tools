@@ -26,7 +26,7 @@ if [ "$target" = dns ]; then
 elif [ "$target" = status ]; then
     files="Dockerfile.status status-www/index.html status-www/architect.css status-www/app.js status-www/whoami.sh status-www/lookup.sh status-www/sink.sh status-www/node.sh status-www/httpd.conf"
 else
-    files="Dockerfile entrypoint.sh awg-uapi awg-peer awg-log.sh awg-health awg-dump.sh awg-under awg-leak awg-mtu awg-watch"
+    files="Dockerfile entrypoint.sh awg-uapi awg-peer awg-exclude awg-log.sh awg-health awg-dump.sh awg-under awg-leak awg-mtu awg-watch"
     # Our patches to this daemon tag, when there are any: only the image built
     # from that tag changes with them.
     for p in patches/"$gotag"/*.patch; do

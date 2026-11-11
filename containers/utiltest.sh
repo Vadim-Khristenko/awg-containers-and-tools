@@ -100,6 +100,21 @@ out=$(docker exec "$NODE" awg-under "$PAGE_C:9" 2>&1); rc=$?
 echo "$out"
 [ "$rc" != 0 ]; check $? "awg-under fails when nothing answers"
 
+# The bash twin of crates/awg-core/src/exclude.rs, on the vectors tested there.
+hr "awg-exclude: a full tunnel minus the given CIDRs"
+x() { docker exec "$NODE" awg-exclude "$@" 2>&1; }
+[ "$(x)" = "0.0.0.0/0,::/0" ]; check $? "nothing excluded is a full tunnel"
+[ "$(x 192.168.0.0/16)" = "0.0.0.0/1,128.0.0.0/2,192.0.0.0/9,192.128.0.0/11,192.160.0.0/13,192.169.0.0/16,192.170.0.0/15,192.172.0.0/14,192.176.0.0/12,192.192.0.0/10,193.0.0.0/8,194.0.0.0/7,196.0.0.0/6,200.0.0.0/5,208.0.0.0/4,224.0.0.0/3,::/0" ]
+check $? "a private range leaves the rest of IPv4 and all of IPv6"
+out=$(x 10.0.0.1 fd00::/8)
+[ "${out#*,128.0.0.0/1,}" = "::/1,8000::/2,c000::/3,e000::/4,f000::/5,f800::/6,fc00::/8,fe00::/7" ]
+check $? "an IPv6 prefix is cut out of its own family"
+grep -q ',2001:db8:0:0:1::/128,2001:db8::1:0:0:2/127,' <<< "$(x 2001:db8::1:0:0:1/128)"
+check $? "IPv6 zero runs are written the way Rust writes them"
+[ "$(x '10.1.2.3/8, 10.5.0.0/16' ::/0)" = "$(x 10.0.0.0/8 ::/0)" ]; check $? "overlaps and host bits fold away"
+[ "$(x 0.0.0.0/1)" = "128.0.0.0/1,::/0" ]; check $? "a half of IPv4 leaves the other half"
+x 10.0.0.0/33 >/dev/null; [ $? != 0 ]; check $? "a prefix past the width is refused"
+
 hr "RESULT"
 if [ "$FAIL" = 0 ]; then echo "AWG $V utilities: all checks passed"; else echo "AWG $V utilities: FAILURES above"; fi
 exit "$FAIL"

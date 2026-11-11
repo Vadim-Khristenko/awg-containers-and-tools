@@ -579,7 +579,9 @@ pub fn cmd_peer(args: &[String], lang: Lang) {
     let sub = words.first().map(String::as_str).unwrap_or("list");
     if !matches!(sub, "add" | "list" | "ls" | "rm" | "remove") {
         eprintln!("{}: {sub}", t(lang, K::ErrUnknownCmd));
-        eprintln!("  awg-tool peer add <label> [ip] | list | rm <label|pubkey>");
+        eprintln!(
+            "  awg-tool peer add <label> [ip] [--exclude CIDR,...] | list | rm <label|pubkey>"
+        );
         std::process::exit(2);
     }
 
@@ -619,11 +621,16 @@ pub fn cmd_peer(args: &[String], lang: Lang) {
         }
         _ => {
             let Some(label) = words.get(1) else {
-                fail("awg-tool peer add <label> [ip]".into());
+                fail("awg-tool peer add <label> [ip] [--exclude CIDR,...]".into());
             };
-            let conf =
-                docker::peers::add(&host, &node.name, label, words.get(2).map(String::as_str))
-                    .unwrap_or_else(|e| fail(e.to_string()));
+            let exclude = flag(args, "--exclude").unwrap_or_default();
+            let exclude: Vec<&str> = exclude
+                .split(',')
+                .filter(|c| !c.trim().is_empty())
+                .collect();
+            let ip = words.get(2).map(String::as_str);
+            let conf = docker::peers::add(&host, &node.name, label, ip, &exclude)
+                .unwrap_or_else(|e| fail(e.to_string()));
 
             // The node is trusted to issue a working config; checking it costs
             // nothing and catches a node whose own config drifted.

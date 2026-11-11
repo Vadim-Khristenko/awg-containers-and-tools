@@ -121,6 +121,26 @@ future issue (and to `awg-tool peer add`), set them in the service's
 `environment` and recreate the container in an agreed window, keeping the
 state volume.
 
+### Full tunnel minus a few ranges
+
+WireGuard has no exclude key, so a LAN kept off the tunnel means AllowedIPs
+listing everything else. `awg-peer` computes that list:
+
+```bash
+umask 077
+docker exec \
+  -e AWG_ENDPOINT=vpn.example.com:51820 \
+  -e AWG_CLIENT_EXCLUDE=192.168.0.0/16 \
+  awg-server awg-peer add alice-laptop \
+  > "$HOME/awg-client-configs/alice-laptop.conf"
+```
+
+From a workstation: `awg-tool peer add alice-laptop --exclude 192.168.0.0/16`
+(the list is computed by `awg-tool` and works on older images too). An
+exclusion over the resolver is refused: DNS would leave the tunnel. Not
+together with `AWG_CLIENT_ALLOWED`. A client container does the same with
+`AWG_EXCLUDE` on its own side.
+
 ## State and limits
 
 `awg-peer add`:

@@ -3,6 +3,8 @@
 # goes with a new one.
 #
 #   awg-peer add <label> [ip]     new peer, prints the client config on stdout
+#                                 (AWG_CLIENT_EXCLUDE=cidr,... keeps those off
+#                                 a full tunnel)
 #   awg-peer list                 label, public key, allowed IP, last handshake
 #   awg-peer rm  <label|pubkey>   revoke
 #   awg-peer names                rewrite the resolver's names file
@@ -107,6 +109,28 @@ cmd_add() {
     addr=${addr%%,*}; addr=${addr%%/*}
     net=${addr%.*}
 
+    # What the client routes through the tunnel, settled before the daemon
+    # hears of the peer, so a refusal leaves nothing behind.
+    local allowed="${AWG_CLIENT_ALLOWED:-${net}.0/24, ${SERVICES_NET}}"
+    if [ -n "${AWG_CLIENT_EXCLUDE:-}" ]; then
+        [ -z "${AWG_CLIENT_ALLOWED:-}" ] || die "set AWG_CLIENT_ALLOWED or AWG_CLIENT_EXCLUDE, not both"
+        allowed=$(awg-exclude "$AWG_CLIENT_EXCLUDE") || die "AWG_CLIENT_EXCLUDE: not a CIDR list"
+    fi
+    # A resolver outside AllowedIPs is DNS that leaves the tunnel in the clear.
+    # Adding an address already inside a list changes nothing in its complement.
+    # DNS may also carry search domains; only the addresses count.
+    local w dns_ips="" without with
+    for w in ${CLIENT_DNS//,/ }; do
+        case "$w" in *[!0-9A-Fa-f.:]*|"") : ;; *[.:]*) dns_ips+="$w," ;; esac
+    done
+    if [ -n "$dns_ips" ] && without=$(awg-exclude "$allowed" 2>/dev/null) \
+        && with=$(awg-exclude "$allowed" "$dns_ips" 2>/dev/null) && [ "$without" != "$with" ]; then
+        if [ -n "${AWG_CLIENT_EXCLUDE:-}" ]; then
+            die "AWG_CLIENT_EXCLUDE covers the resolver $CLIENT_DNS: DNS would leave the tunnel"
+        fi
+        printf '!! the resolver %s is outside AllowedIPs: DNS leaves the tunnel\n' "$CLIENT_DNS" >&2
+    fi
+
     if [ -z "$ip" ]; then
         # Lowest free host in the tunnel /24; .1 is the server itself. The live
         # device is the authority, not $PEERS_DIR — peers written into the
@@ -158,7 +182,7 @@ $(conf_obfuscation)
 [Peer]
 PublicKey = $srv_pub
 PresharedKey = $psk
-AllowedIPs = ${AWG_CLIENT_ALLOWED:-${net}.0/24, ${SERVICES_NET}}
+AllowedIPs = $allowed
 Endpoint = $endpoint
 PersistentKeepalive = 25
 EOF
@@ -172,7 +196,7 @@ EOF
     esac
     # AmneziaVPN applies its site lists only when both default routes are
     # there, and drops them without a word otherwise.
-    local v4 v6 routes=",$(printf '%s' "${AWG_CLIENT_ALLOWED:-}" | tr -d ' '),"
+    local v4 v6 routes=",$(printf '%s' "$allowed" | tr -d ' '),"
     case "$routes" in *,0.0.0.0/0,*) v4=1 ;; *) v4=0 ;; esac
     case "$routes" in *,::/0,*) v6=1 ;; *) v6=0 ;; esac
     if [ "$v4" != "$v6" ]; then

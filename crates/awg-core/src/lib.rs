@@ -10,6 +10,7 @@ pub mod chain_budget;
 pub mod check;
 pub mod deploy;
 pub mod engines;
+pub mod exclude;
 pub mod mihomo;
 pub mod mimic;
 pub mod platform;

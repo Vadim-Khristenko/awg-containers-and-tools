@@ -60,9 +60,24 @@ fn peer_ref(who: &str) -> Result<&str> {
     Ok(w)
 }
 
-pub fn add_command(container: &str, label: &str, ip: Option<&str>) -> Result<String> {
+/// `exclude` keeps those CIDRs off a full tunnel. The complement is computed
+/// here and handed over as `AWG_CLIENT_ALLOWED`, which every image reads, so
+/// a node older than `AWG_CLIENT_EXCLUDE` still issues the right config.
+pub fn add_command(
+    container: &str,
+    label: &str,
+    ip: Option<&str>,
+    exclude: &[&str],
+) -> Result<String> {
+    let env = if exclude.is_empty() {
+        String::new()
+    } else {
+        // Digits, hex, dots, colons and slashes only: nothing for a shell.
+        let allowed = crate::exclude::allowed_ips_excluding(exclude)?;
+        format!("-e AWG_CLIENT_ALLOWED={} ", allowed.join(","))
+    };
     let mut cmd = format!(
-        "docker exec {} awg-peer add {}",
+        "docker exec {env}{} awg-peer add {}",
         safe_name(container)?,
         peer_label(label)?
     );
@@ -106,8 +121,15 @@ fn run(host: &Host<'_>, cmd: &str, what: &str) -> Result<String> {
 ///
 /// The config holds the client's private key, generated inside the container
 /// and printed exactly once: the caller is the only place it now exists.
-pub fn add(host: &Host<'_>, container: &str, label: &str, ip: Option<&str>) -> Result<String> {
-    let out = run(host, &add_command(container, label, ip)?, "adding the peer")?;
+pub fn add(
+    host: &Host<'_>,
+    container: &str,
+    label: &str,
+    ip: Option<&str>,
+    exclude: &[&str],
+) -> Result<String> {
+    let cmd = add_command(container, label, ip, exclude)?;
+    let out = run(host, &cmd, "adding the peer")?;
     if !out.contains("[Interface]") {
         return Err(Error::Config(
             "the node answered without a client config".into(),
@@ -151,23 +173,33 @@ mod tests {
     #[test]
     fn commands_carry_only_what_the_node_tool_accepts() {
         assert_eq!(
-            add_command("awg-server", "laptop", None).unwrap(),
+            add_command("awg-server", "laptop", None, &[]).unwrap(),
             "docker exec awg-server awg-peer add laptop"
         );
         assert_eq!(
-            add_command("awg-server", "phone.1", Some("10.8.1.9")).unwrap(),
+            add_command("awg-server", "phone.1", Some("10.8.1.9"), &[]).unwrap(),
             "docker exec awg-server awg-peer add phone.1 10.8.1.9"
         );
         for bad in ["a b", "x;rm -rf /", "$(id)", "", "lap`top`"] {
-            assert!(add_command("awg-server", bad, None).is_err(), "{bad:?}");
+            assert!(
+                add_command("awg-server", bad, None, &[]).is_err(),
+                "{bad:?}"
+            );
         }
-        assert!(add_command("awg-server", "ok", Some("10.0.0.1; reboot")).is_err());
-        assert!(add_command("awg server", "ok", None).is_err());
+        assert!(add_command("awg-server", "ok", Some("10.0.0.1; reboot"), &[]).is_err());
+        assert!(add_command("awg server", "ok", None, &[]).is_err());
         assert_eq!(
             remove_command("awg-server", "7DHFY2VYRZ7Ag+K7C6X0i9FfHkw+q4H0dqIiRCyEXHM=").unwrap(),
             "docker exec awg-server awg-peer rm 7DHFY2VYRZ7Ag+K7C6X0i9FfHkw+q4H0dqIiRCyEXHM="
         );
         assert!(remove_command("awg-server", "x && y").is_err());
+        // The complement goes in as AllowedIPs, so an older image issues it too.
+        assert_eq!(
+            add_command("awg-server", "laptop", None, &["0.0.0.0/1", "fd00::/8"]).unwrap(),
+            "docker exec -e AWG_CLIENT_ALLOWED=128.0.0.0/1,::/1,8000::/2,c000::/3,e000::/4,\
+             f000::/5,f800::/6,fc00::/8,fe00::/7 awg-server awg-peer add laptop"
+        );
+        assert!(add_command("awg-server", "laptop", None, &["10.0.0.0/8;id"]).is_err());
     }
 
     #[test]

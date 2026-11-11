@@ -105,6 +105,7 @@ pub(crate) const VALUE_FLAGS: &[&str] = &[
     "--save",
     "--resolver",
     "--timeout",
+    "--exclude",
 ];
 
 /// The first word that is neither a flag nor a flag's value.
@@ -198,7 +199,7 @@ fn usage(lang: Lang) {
     println!("  awg-tool check <file|-|vpn://...> [--client X] [--version 3.1] [--json]");
     println!("      {}", t(lang, K::CmdCheck));
     println!(
-        "  awg-tool peer add <label> [ip] [--out FILE] [--vpn] [--mihomo] | list | rm <label|pubkey>"
+        "  awg-tool peer add <label> [ip] [--exclude CIDR,...] [--out FILE] [--vpn] [--mihomo] | list | rm <label|pubkey>"
     );
     println!("      {}", t(lang, K::CmdPeer));
     println!("  awg-tool rotate [--container X] [--dry-run] [--yes] [--out FILE] [any gen option]");
