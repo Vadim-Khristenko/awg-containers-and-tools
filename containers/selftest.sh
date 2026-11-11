@@ -83,7 +83,7 @@ EOF
 # The same client with the default route through the tunnel. It runs only
 # after the first client is gone, so the server sees one peer roam, not two
 # fight over one key.
-sed 's|^AllowedIPs = 10.99.0.0/24$|AllowedIPs = 0.0.0.0/0|' "$WORK/client.conf" > "$WORK/full.conf"
+sed 's|^AllowedIPs = 10.99.0.0/24$|AllowedIPs = 0.0.0.0/0, ::/0|' "$WORK/client.conf" > "$WORK/full.conf"
 chmod 644 "$WORK"/*.conf; chmod 755 "$WORK"
 
 hr "containers"
@@ -180,8 +180,10 @@ docker rm -f "$CLI" >/dev/null 2>&1
 # where the entrypoint writes fwmark and policy rules. fwmark is a device key:
 # written after a peer block the daemon refuses the whole set.
 hr "PROOF 5: a full-tunnel client"
+# Both families on, so ::/0 has somewhere to go.
 docker run -d --name "$FULL" --network "$NET" --ip 172.31.99.12 \
     --cap-add NET_ADMIN --device /dev/net/tun \
+    --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv6.conf.default.disable_ipv6=0 \
     -e AWG_DUMP_REQUEST=1 -v "$WORK/full.conf:/etc/amnezia/awg/awg0.conf:ro" \
     "$IMG" >/dev/null || exit 1
 sleep 6
@@ -193,6 +195,10 @@ route=$(docker exec "$FULL" ip route get 1.1.1.1 2>&1)
 echo "route to 1.1.1.1: $route"
 grep -q "dev ${AWG_IFACE:-awg0}" <<< "$route"; check $? "full-tunnel client routes the internet into the tunnel"
 docker exec "$FULL" ping -c 4 -W 3 10.99.0.1 >/dev/null 2>&1; check $? "full-tunnel client reaches the server through the tunnel"
+# ::/0 used to get no rules at all, and IPv6 went out on eth0.
+route6=$(docker exec "$FULL" ip -6 route get 2001:db8::1 2>&1)
+echo "route to 2001:db8::1: $route6"
+grep -q "dev ${AWG_IFACE:-awg0}" <<< "$route6"; check $? "full-tunnel client routes IPv6 into the tunnel"
 
 hr "RESULT"
 if [ "$FAIL" = 0 ]; then echo "AWG $V: all checks passed"; else echo "AWG $V: FAILURES above"; fi

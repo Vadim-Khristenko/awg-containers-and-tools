@@ -229,8 +229,14 @@ done
 # peer's lines amneziawg-go reads it as a peer key and rejects the whole set
 # with EINVAL, so it goes ahead of replace_peers.
 FULL_TUNNEL=0
+# The families with a default route, as `ip` flags: each needs its own table
+# route and rules, or a ::/0 peer leaves IPv6 on eth0.
+FULL_FAMILIES=()
 for cidr in ${ALLOWED[@]+"${ALLOWED[@]}"}; do
-    case "$cidr" in 0.0.0.0/0|::/0) FULL_TUNNEL=1 ;; esac
+    case "$cidr" in
+        0.0.0.0/0) FULL_TUNNEL=1; FULL_FAMILIES+=(-4) ;;
+        ::/0)      FULL_TUNNEL=1; FULL_FAMILIES+=(-6) ;;
+    esac
 done
 if [ "$FULL_TUNNEL" = 1 ]; then REQ+=("fwmark=$FWMARK"); fi
 REQ+=("replace_peers=true" ${PREQ[@]+"${PREQ[@]}"})
@@ -300,11 +306,21 @@ for a in "${_addrs[@]}"; do
 done
 ip link set up dev "$IFACE"
 
+RULED=()
 if [ "$FULL_TUNNEL" = 1 ]; then
-    # awg-quick's routing, minus the parts that need the tools.
-    ip route add default dev "$IFACE" table "$RTABLE"
-    ip rule add not fwmark "$FWMARK" table "$RTABLE"
-    ip rule add table main suppress_prefixlength 0
+    # awg-quick's routing, minus the parts that need the tools, per family.
+    for fam in "${FULL_FAMILIES[@]}"; do
+        # With IPv6 off in the container there is no IPv6 to leak, and no
+        # route to add either.
+        if [ "$fam" = -6 ] && [ "$(cat "/proc/sys/net/ipv6/conf/$IFACE/disable_ipv6" 2>/dev/null || echo 1)" != 0 ]; then
+            log "::/0 in AllowedIPs, but IPv6 is off in this container: nothing to route"
+            continue
+        fi
+        ip "$fam" route add default dev "$IFACE" table "$RTABLE"
+        ip "$fam" rule add not fwmark "$FWMARK" table "$RTABLE"
+        ip "$fam" rule add table main suppress_prefixlength 0
+        RULED+=("$fam")
+    done
     sysctl -q -w net.ipv4.conf.all.src_valid_mark=1 2>/dev/null || true
 else
     for cidr in ${ALLOWED[@]+"${ALLOWED[@]}"}; do
@@ -403,10 +419,10 @@ shutdown() {
     trap - TERM INT EXIT
     awg_event stop
     if [ -n "$WATCH" ]; then kill "$WATCH" 2>/dev/null || true; fi
-    if [ "$FULL_TUNNEL" = 1 ]; then
-        ip rule del table main suppress_prefixlength 0 2>/dev/null || true
-        ip rule del not fwmark "$FWMARK" table "$RTABLE" 2>/dev/null || true
-    fi
+    for fam in ${RULED[@]+"${RULED[@]}"}; do
+        ip "$fam" rule del table main suppress_prefixlength 0 2>/dev/null || true
+        ip "$fam" rule del not fwmark "$FWMARK" table "$RTABLE" 2>/dev/null || true
+    done
     kill "$DAEMON" 2>/dev/null || true
     wait "$DAEMON" 2>/dev/null || true
     ip link del "$IFACE" 2>/dev/null || true
