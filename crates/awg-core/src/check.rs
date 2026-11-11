@@ -722,6 +722,48 @@ pub fn audit(text: &str, conf: &ConfFile) -> Vec<Violation> {
             ).ru(format!("пир #{n}: Endpoint {e} не в формате host:port"))),
             _ => {}
         }
+        if let Some(e) = peer.get("Endpoint")
+            && e.split(':').next() == Some(crate::vpn::PLACEHOLDER_HOST)
+        {
+            found.push(Violation::warn(
+                format!("Endpoint#{n}"),
+                "conf.peer_endpoint_placeholder",
+                format!(
+                    "peer #{n}: the Endpoint is still {}, which no client can dial: set AWG_PUBLIC_HOST on the node and issue the config again",
+                    crate::vpn::PLACEHOLDER_HOST
+                ),
+            ).ru(format!(
+                "пир #{n}: Endpoint всё ещё {}, к нему не подключится ни один клиент: задай AWG_PUBLIC_HOST на узле и выдай конфиг заново",
+                crate::vpn::PLACEHOLDER_HOST
+            )));
+        }
+        // AmneziaVPN (vpnConnection.cpp, appendSplitTunnelingConfig, every
+        // platform) applies its site lists only when AllowedIPs holds both
+        // default routes, and drops them without a word otherwise.
+        if !server && let Some(allowed) = peer.get("AllowedIPs") {
+            let routes: Vec<&str> = allowed.split(',').map(str::trim).collect();
+            let v4 = routes.contains(&"0.0.0.0/0");
+            let v6 = routes.contains(&"::/0");
+            if v4 != v6 {
+                let (has, lacks) = if v4 {
+                    ("0.0.0.0/0", "::/0")
+                } else {
+                    ("::/0", "0.0.0.0/0")
+                };
+                found.push(Violation::warn(
+                    format!("AllowedIPs#{n}"),
+                    "conf.full_tunnel_one_family",
+                    format!(
+                        "peer #{n}: AllowedIPs has {has} without {lacks}. AmneziaVPN then ignores its \
+                         site lists (Direct / Through VPN) without saying so; a full tunnel is \
+                         `0.0.0.0/0, ::/0`"
+                    ),
+                ).ru(format!(
+                    "пир #{n}: в AllowedIPs есть {has} без {lacks}. AmneziaVPN тогда молча не применяет \
+                     списки сайтов («Напрямую» / «Через VPN»); полный туннель это `0.0.0.0/0, ::/0`"
+                )));
+            }
+        }
     }
     found
 }
@@ -873,6 +915,53 @@ mod tests {
         assert!(codes(&check("vpn://AAAA", &CheckOptions::default())).contains(&"conf.bad_link"));
     }
 
+    const CLIENT_HEAD: &str = "[Interface]\nPrivateKey = yNMDBJ4Vd3nZuJ2FZ1ChNTvHNQg1KgLpOaOtQC8LSXY=\n\
+         Address = 10.0.0.2/32\nJc = 4\nJmin = 40\nJmax = 70\n\n[Peer]\n\
+         PublicKey = yNMDBJ4Vd3nZuJ2FZ1ChNTvHNQg1KgLpOaOtQC8LSXY=\n";
+
+    #[test]
+    fn a_full_tunnel_on_one_family_is_named() {
+        let conf = |allowed: &str| {
+            format!("{CLIENT_HEAD}Endpoint = 203.0.113.10:51820\nAllowedIPs = {allowed}\n")
+        };
+        let half = codes(&check(&conf("0.0.0.0/0"), &CheckOptions::default()));
+        assert!(half.contains(&"conf.full_tunnel_one_family"));
+        let half6 = codes(&check(&conf("::/0, 10.8.0.0/24"), &CheckOptions::default()));
+        assert!(half6.contains(&"conf.full_tunnel_one_family"));
+        for fine in [
+            "0.0.0.0/0, ::/0",
+            "::/0,0.0.0.0/0",
+            "10.8.0.0/24, 172.29.172.0/24",
+        ] {
+            let r = codes(&check(&conf(fine), &CheckOptions::default()));
+            assert!(!r.contains(&"conf.full_tunnel_one_family"), "{fine}");
+        }
+    }
+
+    #[test]
+    fn a_server_is_not_told_about_client_site_lists() {
+        let conf = CLIENT_HEAD.replace(
+            "Address = 10.0.0.2/32",
+            "Address = 10.0.0.1/24\nListenPort = 51820",
+        ) + "AllowedIPs = 0.0.0.0/0\n";
+        let r = codes(&check(&conf, &CheckOptions::default()));
+        assert!(!r.contains(&"conf.full_tunnel_one_family"));
+    }
+
+    #[test]
+    fn a_placeholder_endpoint_is_named() {
+        let conf = format!(
+            "{CLIENT_HEAD}Endpoint = SERVER_PUBLIC_IP:51820\nAllowedIPs = 0.0.0.0/0, ::/0\n"
+        );
+        let r = codes(&check(&conf, &CheckOptions::default()));
+        assert!(r.contains(&"conf.peer_endpoint_placeholder"));
+        let real = conf.replace("SERVER_PUBLIC_IP", "203.0.113.10");
+        assert!(
+            !codes(&check(&real, &CheckOptions::default()))
+                .contains(&"conf.peer_endpoint_placeholder")
+        );
+    }
+
     #[test]
     fn every_finding_speaks_russian_too() {
         let inputs = [
@@ -887,6 +976,9 @@ mod tests {
             "vpn://AAAA",
             "[Interface]\nPrivateKey = yNMDBJ4Vd3nZuJ2FZ1ChNTvHNQg1KgLpOaOtQC8LSXY=\nAddress = 10.0.0.2/32\n",
             "Jc = x\nJmax = 2000\nMTU = 1280",
+            "[Interface]\nPrivateKey = yNMDBJ4Vd3nZuJ2FZ1ChNTvHNQg1KgLpOaOtQC8LSXY=\nAddress = 10.0.0.2/32\n\
+             Jc = 4\n[Peer]\nPublicKey = yNMDBJ4Vd3nZuJ2FZ1ChNTvHNQg1KgLpOaOtQC8LSXY=\n\
+             Endpoint = SERVER_PUBLIC_IP:51820\nAllowedIPs = 0.0.0.0/0\n",
         ];
         let wiresock = versions::client("wiresock").unwrap();
         for input in inputs {

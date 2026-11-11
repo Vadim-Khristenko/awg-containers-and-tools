@@ -187,7 +187,7 @@ pub fn encode(config: &Value) -> Result<String> {
 
 /// What `awg-peer` writes as the endpoint when the node was not told its own
 /// public address.
-const PLACEHOLDER_HOST: &str = "SERVER_PUBLIC_IP";
+pub(crate) const PLACEHOLDER_HOST: &str = "SERVER_PUBLIC_IP";
 
 /// Turn a `.conf` straight into a link.
 ///
