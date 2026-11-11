@@ -47,7 +47,8 @@ LABEL org.opencontainers.image.title="amnezia-wg-dns — tunnel-only resolver (u
 # root process. A copy without the capability stays beside it: a binary with a
 # file capability the container's bounding set lacks cannot be executed at
 # all, and `cap_drop: [ALL]` alone is such a container.
-RUN apk add --no-cache unbound libcap \
+RUN apk upgrade --no-cache \
+ && apk add --no-cache unbound libcap \
  && rm -rf /var/cache/apk/* /usr/share/man \
  && mkdir -p /var/log/unbound /etc/unbound/blacklist.d /run/awg-dns /var/lib/awg-dns /var/lib/awg-dns-public \
       /etc/awg-dns/blocklists.d /etc/awg-dns/allowlist.d /etc/awg-dns/records.d /etc/awg-dns/vpn.d /etc/awg-dns/forward.d \

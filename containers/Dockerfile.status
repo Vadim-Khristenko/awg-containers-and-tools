@@ -37,7 +37,8 @@ LABEL org.opencontainers.image.title="amnezia-wg-status — the tunnel's own sta
 # docker copies an image directory's owner onto an empty volume, and this
 # page starting before the resolver has written anything would hand the
 # resolver's volume to root and lock it out of its own counters.
-RUN apk add --no-cache busybox-extras \
+RUN apk upgrade --no-cache \
+ && apk add --no-cache busybox-extras \
  && mkdir -p /var/www/cgi-bin /var/www/mtu \
  && dd if=/dev/urandom of=/var/www/speedtest.bin bs=1M count=8 2>/dev/null \
  && for k in 1 16 128 1024; do dd if=/dev/urandom of=/var/www/mtu/${k}k.bin bs=1024 count=$k 2>/dev/null; done \

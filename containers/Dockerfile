@@ -89,7 +89,11 @@ LABEL org.opencontainers.image.title="AmneziaWG ${AWG_VERSION} node (unofficial)
 # leave, and as what", the second answers "can this node reach the thing it
 # needs". They cost a couple of megabytes and save a round trip of "install a
 # shell into the image" exactly when the node is at its worst.
-RUN apk add --no-cache bash iptables ip6tables iproute2 conntrack-tools socat dumb-init tcpdump curl
+# The base image lags the repository: upgrade first, so a fix that is out
+# (zlib for CVE-2026-4738, when this was written) is in the image. CI fails
+# the build on a fixable high or critical CVE.
+RUN apk upgrade --no-cache \
+ && apk add --no-cache bash iptables ip6tables iproute2 conntrack-tools socat dumb-init tcpdump curl
 COPY --from=build /out-awg-go /usr/bin/amneziawg-go
 COPY --from=build /out-patches /usr/share/awg/patches
 COPY --from=tools /out-awg    /usr/bin/awg
