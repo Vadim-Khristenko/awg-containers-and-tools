@@ -2,7 +2,7 @@
 
 Self-hosted AmneziaWG servers for **every** protocol generation (1.0, 1.5, 2.0, **3.0** and **3.1**) as small container images, a tunnel-only resolver with its own `.vpn` pages, and a Rust CLI with an interactive UI that generates the obfuscation parameters, installs servers over SSH and runs them afterwards.
 
-**Русская версия: [RU.README.MD](RU.README.MD)**
+**[Читать по-русски](RU.README.MD)**
 
 > **Unofficial.** This is a community project. It is not affiliated with, endorsed by, or supported by AmneziaVPN. If something here breaks, open an issue **on this repository**, please, not upstream.
 
@@ -366,10 +366,13 @@ Known limits, so they are not a surprise:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) ([по-русски](RU.CONTRIBUTING.MD)).
+See [CONTRIBUTING.md](CONTRIBUTING.md) (a Russian version is in `RU.CONTRIBUTING.MD`).
 
-Справка для AI-агентов по установке, настройке, клиентам и диагностике:
-[`.agent/skills`](.agent/skills/README.md) (на русском, без дополнительных скриптов).
+There are skills for AI agents in [`.agent/skills`](.agent/skills/README.md), documentation only, with no extra scripts:
+
+- `awg-operations`: installing over SSH and with Compose, protocol and DNS settings, issuing and revoking clients, known client quirks, diagnostics, updates and backups;
+- `server-audit`: a fast read-only check of a server for open ports, access that should not be there, and outdated or vulnerable software;
+- `plain-talk`: how an agent talks to you, answer first and without filler.
 
 ## Support the project
 
