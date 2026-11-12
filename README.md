@@ -344,7 +344,7 @@ None of these are smoke tests. `dnstest.sh` alone proves the resolver unreachabl
 
 ## Status
 
-This is release `0.5.1`. There are 449 tests (398 in `awg-core`, 43 in `awg-cli`, 8 in `awg-dns-chain`), all green, and the container suites pass against live tunnels on a Linux host.
+This is release `0.5.5`. There are 460 tests (409 in `awg-core`, 43 in `awg-cli`, 8 in `awg-dns-chain`), all green, and the container suites pass against live tunnels on a Linux host.
 
 Planned: a web UI, WASM builds, Android builds.
 
@@ -353,7 +353,7 @@ Planned: a web UI, WASM builds, Android builds.
 Every release ships a checksum file named after its tag:
 
 ```bash
-sha256sum -c checksums-v0.5.1.sha256
+sha256sum -c checksums-v0.5.5.sha256
 ```
 
 The binaries are not signed. The checksum tells you the file arrived intact; it does not tell you who built it.

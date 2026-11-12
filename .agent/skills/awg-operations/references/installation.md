@@ -43,7 +43,7 @@ it in a directory on PATH. Do not guess the URL or the latest release number.
 Example check:
 
 ```bash
-sha256sum -c checksums-v0.5.1.sha256
+sha256sum -c checksums-v0.5.5.sha256
 ```
 
 The checksum proves the file arrived intact, not who built it: the binaries are

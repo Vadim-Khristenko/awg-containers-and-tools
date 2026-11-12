@@ -76,6 +76,8 @@ Typical symptoms:
 | TUN or the interface is missing | TUN on the host, the `/dev/net/tun` mount, `NET_ADMIN`, the start error |
 | The daemon refused the config | Image generation, allowed keys and tags, `errno`; `awg-tool check` |
 | A full-tunnel client refused on images before 0.5.1 | `fwmark` was written after the peers; update the image |
+| A `::/0` client container sends IPv6 out through `eth0` | Images before 0.5.5 wrote the policy rules for IPv4 only; update the image |
+| A LAN or one site must stay off a full tunnel | `AWG_CLIENT_EXCLUDE` or `awg-tool peer add --exclude` for issued configs, `AWG_EXCLUDE` in a client container; never over the resolver |
 | A tool does not know `HeaderProtectionKey` | Do not use the old `awg setconf`; the entrypoint turns the `.conf` into UAPI |
 | Peer `never`, the device was never switched on | Switch it on and make traffic first; do not change the server |
 | No handshake after traffic | Endpoint (not `SERVER_PUBLIC_IP`), UDP publish, firewall, NAT, keys and PSK, obfuscation and app version |
